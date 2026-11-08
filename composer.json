@@ -34,7 +34,7 @@
         "php-units-of-measure/php-units-of-measure": "^2.2",
         "psr/http-factory-implementation": "*",
         "rlanvin/php-rrule": "^2.6",
-        "toin0u/geocoder-laravel": "^4.4",
+        "toin0u/geocoder-laravel": "^13.2.2",
         "webit/eval-math": "^1.0",
         "spatie/icalendar-generator": "^2.8"
     },
