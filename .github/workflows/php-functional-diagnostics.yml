@@ -48,6 +48,12 @@ jobs:
           composer config --global --json policy.advisories.ignore-id '{"PKSA-zwc5-qtrz-zm1n":{"on-audit":false,"reason":"GST temporary PHP CI diagnostics only; keep blocking dependency audit. Vulnerability is NOT accepted for production."}}'
           composer config --global policy.advisories.ignore-id
 
+      # This changes composer.json ONLY inside the ephemeral CI checkout.
+      # It is a require-dev constraint: Symfony HTTP Kernel 6.4 conflicts
+      # with the old ^5.4 version. A permanent change requires separate review.
+      - name: Align diagnostic-only Symfony VarDumper dev constraint
+        run: composer require --dev 'symfony/var-dumper:^6.4' --no-update --no-interaction
+
       - name: Validate Composer manifest
         run: composer validate
 
