@@ -70,6 +70,8 @@ jobs:
           retention-days: 7
 
       - name: Check formatting without modifying code
+        id: format-check
+        continue-on-error: true
         run: composer test:lint
 
       - name: Run isolated PHP test files
@@ -80,6 +82,14 @@ jobs:
 
       - name: Enforce 100 percent coverage
         run: php scripts/coverage-summary.php coverage/clover.xml --fail-under=100
+
+      # Always report formatting failures, but do it AFTER the functional tests
+      # so pre-existing style drift cannot hide unrelated runtime regressions.
+      - name: Preserve formatting failure as a red diagnostic
+        if: ${{ always() && steps.format-check.outcome == 'failure' }}
+        run: |
+          echo "Formatting drift found. Diagnostic result is NOT releasable."
+          exit 1
 
   dependency-security:
     name: Dependency security audit (MUST block release)
