@@ -16,6 +16,7 @@ class FleetOpsWebhookProcessingProviderFake implements TelematicProviderInterfac
 {
     public array $webhookResult         = ['devices' => [], 'events' => [], 'sensors' => []];
     public bool $throwsDuringProcessing = false;
+    public bool $signatureValid         = true;
 
     public function connect(Telematic $telematic): void
     {
@@ -53,7 +54,7 @@ class FleetOpsWebhookProcessingProviderFake implements TelematicProviderInterfac
 
     public function validateWebhookSignature(string $payload, string $signature, array $credentials): bool
     {
-        return true;
+        return $this->signatureValid;
     }
 
     public function processWebhook(array $payload, array $headers = []): array
@@ -109,7 +110,7 @@ class FleetOpsWebhookProcessingServiceFake extends TelematicService
 
     public function __construct()
     {
-        $this->telematic = new Telematic(['uuid' => 'telematic-uuid', 'provider' => 'samsara']);
+        $this->telematic = (new Telematic())->forceFill(['uuid' => 'telematic-uuid', 'provider' => 'samsara', 'company_uuid' => 'company-1']);
     }
 
     public function resolveWebhookTelematic(string $providerKey, array $payload = [], array $headers = [], ?string $integrationId = null): ?Telematic
@@ -189,12 +190,14 @@ function fleetopsWebhookProcessingController(): array
         $provider,
         $service,
         $idempotency,
+        // The durable replay ledger the controller now uses (the idempotency fake is no longer consulted).
+        Fleetbase\Tests\Support\WebhookReceiptDatabase::boot(),
     ];
 }
 
 test('provider webhooks continue when malformed devices and sensors are skipped', function () {
-    [$controller, $provider, $service, $idempotency] = fleetopsWebhookProcessingController();
-    $provider->webhookResult                         = [
+    [$controller, $provider, $service, $idempotency, $db] = fleetopsWebhookProcessingController();
+    $provider->webhookResult                              = [
         'devices' => [
             ['unit_id' => 'unit-1'],
         ],
@@ -210,7 +213,10 @@ test('provider webhooks continue when malformed devices and sensors are skipped'
     ];
 
     $response = $controller->handle(
-        Request::create('/webhooks/telematics/samsara', 'POST', ['payload' => true], server: ['HTTP_X_IDEMPOTENCY_KEY' => 'skip-key']),
+        Request::create('/webhooks/telematics/samsara', 'POST', ['payload' => true], server: [
+            'HTTP_X_IDEMPOTENCY_KEY'   => 'skip-key',
+            'HTTP_X_WEBHOOK_SIGNATURE' => 'signed-fixture',
+        ]),
         'samsara'
     );
 
@@ -224,7 +230,9 @@ test('provider webhooks continue when malformed devices and sensors are skipped'
         ->and($service->storedSensors)->toHaveCount(2)
         ->and($service->storedSensors[0][1])->toBe('device-0')
         ->and($service->storedSensors[1][1])->toBeNull()
-        ->and($idempotency->processed)->toBe(['skip-key']);
+        // Recorded as a durable, tenant-scoped receipt, not in the global cache manager.
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($db))->toBe(['processed'])
+        ->and($idempotency->processed)->toBe([]);
 
     $service->rejectDevices  = true;
     $service->rejectSensors  = true;
@@ -237,18 +245,55 @@ test('provider webhooks continue when malformed devices and sensors are skipped'
         ],
     ];
 
-    $response = $controller->handle(Request::create('/webhooks/telematics/samsara', 'POST'), 'samsara');
+    $response = $controller->handle(Request::create('/webhooks/telematics/samsara', 'POST', server: ['HTTP_X_WEBHOOK_SIGNATURE' => 'signed-fixture']), 'samsara');
 
     expect($response->getStatusCode())->toBe(200)
-        ->and($response->getData(true))->toBe(['status' => 'processed']);
+        ->and($response->getData(true))->toBe(['status' => 'processed'])
+        // No idempotency header: the second receipt is bound to its own raw body.
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($db))->toBe(['processed', 'processed']);
 });
 
 test('provider webhook processing failures return server errors', function () {
-    [$controller, $provider]          = fleetopsWebhookProcessingController();
+    [$controller, $provider, , , $db] = fleetopsWebhookProcessingController();
     $provider->throwsDuringProcessing = true;
+
+    $response = $controller->handle(Request::create('/webhooks/telematics/samsara', 'POST', server: ['HTTP_X_WEBHOOK_SIGNATURE' => 'signed-fixture']), 'samsara');
+
+    expect($response->getStatusCode())->toBe(500)
+        ->and($response->getData(true))->toBe(['error' => 'Processing failed'])
+        // The receipt rolled back with the failed processing: a provider retry is processed again.
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($db))->toBe([]);
+});
+test('provider webhook rejects unsigned requests before business processing', function () {
+    [$controller, $provider, $service, $idempotency, $db] = fleetopsWebhookProcessingController();
+    $provider->webhookResult                              = ['devices' => [['unit_id' => 'unit-1']], 'events' => [['type' => 'untrusted']]];
 
     $response = $controller->handle(Request::create('/webhooks/telematics/samsara', 'POST'), 'samsara');
 
-    expect($response->getStatusCode())->toBe(500)
-        ->and($response->getData(true))->toBe(['error' => 'Processing failed']);
+    expect($response->getStatusCode())->toBe(403)
+        ->and($service->linkedDevices)->toBe([])
+        ->and($service->storedEvents)->toBe([])
+        ->and($service->storedSensors)->toBe([])
+        ->and($idempotency->processed)->toBe([])
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($db))->toBe([]);
+});
+
+test('provider webhook rejects a signed but invalid signature before processing', function () {
+    [$controller, $provider, $service, $idempotency, $db] = fleetopsWebhookProcessingController();
+    $provider->signatureValid                             = false;
+    $provider->webhookResult                              = ['events' => [['type' => 'untrusted']]];
+    $request                                              = Request::create('/webhooks/telematics/samsara', 'POST', server: [
+        'HTTP_X_WEBHOOK_SIGNATURE' => 'invalid-fixture',
+        'HTTP_X_IDEMPOTENCY_KEY'   => 'untrusted-idempotency-key',
+    ]);
+
+    $response = $controller->handle($request, 'samsara');
+
+    expect($response->getStatusCode())->toBe(403)
+        ->and($service->linkedDevices)->toBe([])
+        ->and($service->storedEvents)->toBe([])
+        ->and($service->storedSensors)->toBe([])
+        ->and($idempotency->processed)->toBe([])
+        // Authentication happens before any receipt is reserved.
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($db))->toBe([]);
 });

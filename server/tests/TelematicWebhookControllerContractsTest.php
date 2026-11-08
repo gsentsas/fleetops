@@ -182,6 +182,8 @@ function fleetopsWebhookController(?FleetOpsWebhookProvider $provider = null, ?F
         $provider,
         $service,
         $idempotency,
+        // The durable replay ledger the controller now uses (the idempotency fake is no longer consulted).
+        Fleetbase\Tests\Support\WebhookReceiptDatabase::boot(),
     ];
 }
 
@@ -196,18 +198,30 @@ function fleetopsWebhookRequest(array $payload = [], array $headers = [], array 
 }
 
 test('telematic webhook controller short circuits duplicate provider webhooks', function () {
-    [$controller] = fleetopsWebhookController(idempotency: new FleetOpsWebhookIdempotency(true));
+    // A real replay through the durable ledger: the second identical authenticated
+    // delivery is a duplicate and its business effects are not applied again.
+    [$controller, $provider, $service, , $db] = fleetopsWebhookController();
+    $service->telematic                       = (new Telematic())->forceFill(['uuid' => 'telematic-uuid', 'provider' => 'samsara', 'company_uuid' => 'company-1']);
+    $provider->webhookResult                  = ['events' => [['external_id' => 'device-1', 'type' => 'ignition_on']]];
+    $headers                                  = ['X-Idempotency-Key' => 'duplicate-key', 'X-Webhook-Signature' => 'valid-test-signature'];
 
-    $response = $controller->handle(fleetopsWebhookRequest(headers: ['X-Idempotency-Key' => 'duplicate-key']), 'samsara');
+    $first    = $controller->handle(fleetopsWebhookRequest(headers: $headers), 'samsara');
+    $response = $controller->handle(fleetopsWebhookRequest(headers: $headers), 'samsara');
 
-    expect($response->getStatusCode())->toBe(200)
-        ->and($response->getData(true))->toBe(['status' => 'duplicate']);
+    expect($first->getData(true))->toBe(['status' => 'processed'])
+        ->and($response->getStatusCode())->toBe(200)
+        ->and($response->getData(true))->toBe(['status' => 'duplicate'])
+        ->and($service->storedEvents)->toHaveCount(1)
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($db))->toBe(['processed']);
 });
 
 test('telematic webhook controller rejects unresolved provider webhooks', function () {
     [$controller] = fleetopsWebhookController();
 
-    $response = $controller->handle(fleetopsWebhookRequest(query: ['telematic' => 'missing']), 'samsara');
+    $response = $controller->handle(fleetopsWebhookRequest(
+        query: ['telematic' => 'missing'],
+        headers: ['X-Webhook-Signature' => 'valid-test-signature']
+    ), 'samsara');
 
     expect($response->getStatusCode())->toBe(422)
         ->and($response->getData(true))->toBe(['error' => 'Unable to resolve telematic integration']);
@@ -225,9 +239,9 @@ test('telematic webhook controller rejects invalid signatures', function () {
 });
 
 test('telematic webhook controller processes provider devices events and sensors', function () {
-    [$controller, $provider, $service, $idempotency] = fleetopsWebhookController();
-    $service->telematic                              = new Telematic(['uuid' => 'telematic-uuid', 'provider' => 'samsara']);
-    $provider->webhookResult                         = [
+    [$controller, $provider, $service, $idempotency, $db] = fleetopsWebhookController();
+    $service->telematic                                   = (new Telematic())->forceFill(['uuid' => 'telematic-uuid', 'provider' => 'samsara', 'company_uuid' => 'company-1']);
+    $provider->webhookResult                              = [
         'devices' => [
             ['external_id' => 'device-1'],
             ['name' => 'missing external id'],
@@ -240,7 +254,10 @@ test('telematic webhook controller processes provider devices events and sensors
         ],
     ];
 
-    $response = $controller->handle(fleetopsWebhookRequest(headers: ['X-Idempotency-Key' => 'new-key']), 'samsara');
+    $response = $controller->handle(fleetopsWebhookRequest(headers: [
+        'X-Idempotency-Key'   => 'new-key',
+        'X-Webhook-Signature' => 'valid-test-signature',
+    ]), 'samsara');
 
     expect($response->getStatusCode())->toBe(200)
         ->and($response->getData(true))->toBe(['status' => 'processed'])
@@ -249,5 +266,67 @@ test('telematic webhook controller processes provider devices events and sensors
         ->and($service->storedEvents[0][1])->toBe('device-0')
         ->and($service->storedSensors)->toHaveCount(1)
         ->and($service->storedSensors[0][1])->toBe('device-0')
-        ->and($idempotency->processed)->toBe(['new-key']);
+        // Recorded as a durable, tenant-scoped receipt, not in the global cache manager.
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($db))->toBe(['processed'])
+        ->and($idempotency->processed)->toBe([]);
+});
+test('telematic webhook controller rejects missing signatures before processing', function () {
+    [$controller, $provider, $service, $idempotency, $db] = fleetopsWebhookController();
+    $service->telematic                                   = new Telematic(['uuid' => 'telematic-uuid', 'provider' => 'samsara']);
+
+    $response = $controller->handle(fleetopsWebhookRequest(headers: [
+        'X-Idempotency-Key' => 'untrusted-key',
+    ]), 'samsara');
+
+    expect($response->getStatusCode())->toBe(403)
+        ->and($service->linkedDevices)->toBe([])
+        ->and($service->storedEvents)->toBe([])
+        ->and($service->storedSensors)->toBe([])
+        ->and($idempotency->processed)->toBe([])
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($db))->toBe([]);
+});
+
+test('telematic webhook controller does not trust duplicate idempotency keys without signature validation', function () {
+    $provider                 = new FleetOpsWebhookProvider();
+    $provider->signatureValid = false;
+    $service                  = new FleetOpsWebhookService();
+    $service->telematic       = (new Telematic())->forceFill(['uuid' => 'telematic-uuid', 'provider' => 'samsara', 'company_uuid' => 'company-1']);
+    $idempotency              = new FleetOpsWebhookIdempotency(true);
+    [$controller, , , , $db]  = fleetopsWebhookController($provider, $service, $idempotency);
+
+    $response = $controller->handle(fleetopsWebhookRequest(headers: [
+        'X-Idempotency-Key'   => 'duplicate-key',
+        'X-Webhook-Signature' => 'invalid-test-signature',
+    ]), 'samsara');
+
+    expect($response->getStatusCode())->toBe(403)
+        ->and($service->storedEvents)->toBe([])
+        ->and($idempotency->processed)->toBe([])
+        // Authentication happens before any receipt is reserved.
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($db))->toBe([]);
+});
+
+test('telematic webhook controller rejects GET before provider processing', function () {
+    [$controller, $provider, $service] = fleetopsWebhookController();
+    $request                           = Request::create('/webhooks/telematics/samsara', 'GET');
+
+    $response = $controller->handle($request, 'samsara');
+
+    expect($response->getStatusCode())->toBe(405)
+        ->and($service->linkedDevices)->toBe([])
+        ->and($service->storedEvents)->toBe([]);
+});
+
+test('telematic custom ingest rejects GET without accessing a telematic integration', function () {
+    [$controller] = fleetopsWebhookController();
+    $request      = Request::create('/webhooks/telematics/ingest/test', 'GET');
+
+    expect($controller->ingest($request, 'not-a-real-integration')->getStatusCode())->toBe(405);
+});
+
+test('telematic custom ingest rejects missing signature before integration lookup', function () {
+    [$controller] = fleetopsWebhookController();
+    $request      = Request::create('/webhooks/telematics/ingest/test', 'POST');
+
+    expect($controller->ingest($request, 'not-a-real-integration')->getStatusCode())->toBe(403);
 });

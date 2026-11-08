@@ -765,7 +765,7 @@ class TelematicService
         ApiCacheThrottle::telemetryWrite($trailer, fn () => $trailer->save());
 
         $broadcast = new TrailerLocationChanged($trailer, ['source' => 'telematics', 'device_event_uuid' => $event->uuid, 'provider' => $event->provider, 'position_at' => $event->occurred_at?->toISOString()]);
-        $this->broadcastTelemetry($broadcast, $eventData['_ordered_telemetry'] ?? false);
+        $this->broadcastTelemetry($broadcast, $eventData['_ordered_telemetry'] ?? false, $trailer);
     }
 
     protected function updateVehicleTelemetry(Vehicle $vehicle, array $location, array $eventData, DeviceEvent $event): void
@@ -814,18 +814,37 @@ class TelematicService
             'provider'          => $event->provider,
             'position_at'       => $event->occurred_at?->toISOString(),
         ]);
-        $this->broadcastTelemetry($broadcast, $eventData['_ordered_telemetry'] ?? false);
-        app(TrackingPublisher::class)->vehicleMoved($vehicle);
+        $this->broadcastTelemetry($broadcast, $eventData['_ordered_telemetry'] ?? false, $vehicle);
+        $this->afterTelemetryCommit($vehicle, fn () => app(TrackingPublisher::class)->vehicleMoved($vehicle));
     }
 
-    protected function broadcastTelemetry(object $event, bool $afterCommit): void
+    protected function broadcastTelemetry(object $event, bool $afterCommit, \Illuminate\Database\Eloquent\Model $subject): void
     {
         $event = Telemetry\Configuration::withBroadcastQueue($event);
         if ($afterCommit) {
             \Illuminate\Support\Facades\DB::afterCommit(fn () => broadcast($event));
         } else {
-            broadcast($event);
+            $this->afterTelemetryCommit($subject, fn () => broadcast($event));
         }
+    }
+
+    /**
+     * Run a non-database effect (broadcast, tracking publish) now, or — when
+     * the subject's connection is inside a transaction, e.g. the webhook
+     * replay ledger's — only once it commits, so a rolled-back delivery never
+     * announces a position that was not stored. A rollback discards it.
+     */
+    protected function afterTelemetryCommit(\Illuminate\Database\Eloquent\Model $subject, \Closure $effect): void
+    {
+        // No connection resolver: no database, hence no transaction to wait for.
+        $connection = $subject::getConnectionResolver() !== null ? $subject->getConnection() : null;
+        if ($connection !== null && $connection->transactionLevel() > 0) {
+            $connection->afterCommit($effect);
+
+            return;
+        }
+
+        $effect();
     }
 
     protected function makePositionData(array $location, array $eventData): array
