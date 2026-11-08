@@ -28,8 +28,11 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libzip-dev libgd-dev libfreetype6-dev libjpeg-dev libpng-dev imagemagick libmagickwand-dev libmemcached-dev libgeos-dev libgmp-dev default-mysql-client libicu-dev
       
+    # Composer only needs this token for GitHub API rate limits (every dependency is
+    # public). Repositories without the _GITHUB_AUTH_TOKEN secret, such as forks, fall
+    # back to the job's own read-only token instead of failing on an empty value.
     - name: Configure Composer Auth for Github
-      run: composer config --global github-oauth.github.com ${{ secrets._GITHUB_AUTH_TOKEN }}
+      run: composer config --global github-oauth.github.com "${{ secrets._GITHUB_AUTH_TOKEN || github.token }}"
 
     - name: Validate composer.json and composer.lock
       run: composer validate
