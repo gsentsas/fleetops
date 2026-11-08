@@ -45,7 +45,8 @@ jobs:
       - name: Allow one legacy Laravel advisory for diagnostic resolution ONLY
         run: |
           composer --version
-          composer config --global --json policy.advisories.ignore-id '{"PKSA-zwc5-qtrz-zm1n":{"on-block":false,"reason":"GST temporary PHP CI diagnostics only; vulnerability is NOT accepted for production, and audit must still fail."}}'
+          composer config --global --json policy.advisories.ignore-id '{"PKSA-zwc5-qtrz-zm1n":{"on-audit":false,"reason":"GST temporary PHP CI diagnostics only; keep blocking dependency audit. Vulnerability is NOT accepted for production."}}'
+          composer config --global policy.advisories.ignore-id
 
       - name: Validate Composer manifest
         run: composer validate
