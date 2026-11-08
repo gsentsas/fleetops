@@ -212,7 +212,12 @@ test('flespi provider validates webhooks and normalizes webhook message batches'
             ['id' => 'ignored'],
         ]);
 
-        expect($provider->validateWebhookSignature($payload, 'anything', []))->toBeTrue()
+        expect($provider->validateWebhookSignature($payload, 'anything', []))->toBeFalse()
+            ->and($provider->validateWebhookSignature($payload, 'anything', ['webhook_secret' => '']))->toBeFalse()
+            ->and($provider->validateWebhookSignature($payload, 'anything', ['webhook_secret' => '   ']))->toBeFalse()
+            ->and($provider->validateWebhookSignature($payload, 'anything', ['webhook_secret' => null]))->toBeFalse()
+            ->and($provider->validateWebhookSignature($payload, 'anything', ['webhook_secret' => 7]))->toBeFalse()
+            ->and($provider->validateWebhookSignature($payload, 'anything', ['webhook_secret' => ['invalid']]))->toBeFalse()
             ->and($provider->validateWebhookSignature($payload, $signature, ['webhook_secret' => 'secret']))->toBeTrue()
             ->and($provider->validateWebhookSignature($payload, 'wrong', ['webhook_secret' => 'secret']))->toBeFalse()
             ->and($processed['devices'])->toHaveCount(1)

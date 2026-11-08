@@ -160,8 +160,8 @@ class FlespiProvider extends AbstractProvider
 
     public function validateWebhookSignature(string $payload, string $signature, array $credentials): bool
     {
-        if (!isset($credentials['webhook_secret'])) {
-            return true; // No secret configured, skip validation
+        if (!isset($credentials['webhook_secret']) || !is_string($credentials['webhook_secret']) || trim($credentials['webhook_secret']) === '') {
+            return false;
         }
 
         $expectedSignature = hash_hmac('sha256', $payload, $credentials['webhook_secret']);

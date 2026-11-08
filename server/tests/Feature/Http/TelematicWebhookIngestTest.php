@@ -24,11 +24,12 @@ use Illuminate\Validation\ValidationException;
  */
 class FleetOpsWebhookIngestServiceFake extends TelematicService
 {
-    public array $linked        = [];
-    public array $events        = [];
-    public array $sensors       = [];
-    public bool $eventThrows    = false;
-    public ?Telematic $resolved = null;
+    public array $linked          = [];
+    public array $events          = [];
+    public array $sensors         = [];
+    public bool $eventThrows      = false;
+    public ?Telematic $resolved   = null;
+    public ?string $webhookSecret = 'fixture-hmac-secret';
 
     public function __construct()
     {
@@ -75,7 +76,7 @@ class FleetOpsWebhookIngestServiceFake extends TelematicService
 
     public function getCredentials(Telematic $telematic): array
     {
-        return ['token' => 'secret'];
+        return ['token' => 'secret', 'webhook_secret' => $this->webhookSecret];
     }
 
     public function resolveWebhookTelematic(string $providerKey, array $payload = [], array $headers = [], ?string $integrationId = null): ?Telematic
@@ -216,6 +217,9 @@ function fleetopsWebhookIngestBoot(): SQLiteConnection
         $table->timestamp('deleted_at')->nullable();
     });
 
+    // The durable replay ledger the controller now uses (the idempotency fake is no longer consulted).
+    Fleetbase\Tests\Support\WebhookReceiptDatabase::migrate($connection);
+
     session(['company' => 'company-1']);
 
     return $connection;
@@ -233,10 +237,20 @@ function fleetopsWebhookIngestController(
     );
 }
 
+function fleetopsWebhookIngestSignedRequest(array $payload = []): Request
+{
+    // JSON body is intentionally nonempty: verify HMAC on the actual raw payload.
+    $body    = json_encode($payload, JSON_THROW_ON_ERROR);
+    $request = Request::create('/x', 'POST', [], [], [], ['CONTENT_TYPE' => 'application/json'], $body);
+    $request->headers->set('X-Webhook-Signature', hash_hmac('sha256', $body, 'fixture-hmac-secret'));
+
+    return $request;
+}
+
 test('ingest throws for unknown telematic identifiers', function () {
     fleetopsWebhookIngestBoot();
 
-    expect(fn () => fleetopsWebhookIngestController()->ingest(Request::create('/x', 'POST'), 'missing'))
+    expect(fn () => fleetopsWebhookIngestController()->ingest(fleetopsWebhookIngestSignedRequest(), 'missing'))
         ->toThrow(ModelNotFoundException::class);
 });
 
@@ -244,15 +258,25 @@ test('ingest short circuits duplicate idempotency keys', function () {
     $connection = fleetopsWebhookIngestBoot();
     $connection->table('telematics')->insert(['uuid' => 'telematic-1', 'public_id' => 'telematic_test', 'company_uuid' => 'company-1', 'provider' => 'custom']);
 
-    $idempotency            = new FleetOpsWebhookIngestIdempotencyFake();
-    $idempotency->duplicate = true;
+    // A real replay through the durable ledger: the second identical signed
+    // delivery is a duplicate and its business effects are not applied again.
+    $service    = new FleetOpsWebhookIngestServiceFake();
+    $controller = fleetopsWebhookIngestController($service);
+    $delivery   = function () {
+        $request = fleetopsWebhookIngestSignedRequest(['events' => [['type' => 'location']]]);
+        $request->headers->set('X-Idempotency-Key', 'idem-1');
 
-    $request = Request::create('/x', 'POST');
-    $request->headers->set('X-Idempotency-Key', 'idem-1');
-    $response = fleetopsWebhookIngestController(null, $idempotency)->ingest($request, 'telematic_test');
+        return $request;
+    };
 
-    expect($response->getStatusCode())->toBe(200)
-        ->and($response->getData(true))->toBe(['status' => 'duplicate']);
+    $first    = $controller->ingest($delivery(), 'telematic_test');
+    $response = $controller->ingest($delivery(), 'telematic_test');
+
+    expect($first->getData(true))->toBe(['status' => 'ingested'])
+        ->and($response->getStatusCode())->toBe(200)
+        ->and($response->getData(true))->toBe(['status' => 'duplicate'])
+        ->and($service->events)->toHaveCount(1)
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($connection))->toBe(['processed']);
 });
 
 test('ingest links devices stores events and sensors and marks processed', function () {
@@ -262,7 +286,7 @@ test('ingest links devices stores events and sensors and marks processed', funct
     $service     = new FleetOpsWebhookIngestServiceFake();
     $idempotency = new FleetOpsWebhookIngestIdempotencyFake();
 
-    $request = Request::create('/x', 'POST', [
+    $request = fleetopsWebhookIngestSignedRequest([
         'devices' => [
             ['external_id' => 'ext-1', 'name' => 'Tracker'],
             ['name' => 'No identity device'],
@@ -286,7 +310,9 @@ test('ingest links devices stores events and sensors and marks processed', funct
         ->and($service->events[0][1])->toBe('device-1')
         ->and($service->events[1][1])->toBeNull()
         ->and($service->sensors)->toHaveCount(1)
-        ->and($idempotency->processed)->toBe(['idem-2']);
+        // Recorded as a durable, tenant-scoped receipt, not in the global cache manager.
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($connection))->toBe(['processed'])
+        ->and($idempotency->processed)->toBe([]);
 });
 
 test('ingest reports processing failures', function () {
@@ -296,11 +322,13 @@ test('ingest reports processing failures', function () {
     $service              = new FleetOpsWebhookIngestServiceFake();
     $service->eventThrows = true;
 
-    $request  = Request::create('/x', 'POST', ['events' => [['type' => 'boom']]]);
+    $request  = fleetopsWebhookIngestSignedRequest(['events' => [['type' => 'boom']]]);
     $response = fleetopsWebhookIngestController($service)->ingest($request, 'telematic_test');
 
     expect($response->getStatusCode())->toBe(500)
-        ->and($response->getData(true))->toBe(['error' => 'Ingest failed']);
+        ->and($response->getData(true))->toBe(['error' => 'Ingest failed'])
+        // The receipt rolled back with the failed processing: a retry is processed again.
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($connection))->toBe([]);
 });
 
 test('handle resolves the telematic by unique signature match', function () {
@@ -340,4 +368,62 @@ test('handle rejects ambiguous signature matches', function () {
 
     expect($response->getStatusCode())->toBe(409)
         ->and($response->getData(true))->toBe(['error' => 'Ambiguous telematic integration']);
+});
+test('rejects an unsigned ingest request before integration lookup', function () {
+    fleetopsWebhookIngestBoot();
+    $request = Request::create('/x', 'POST', [], [], [], ['CONTENT_TYPE' => 'application/json'], '{"events":[]}');
+
+    $response = fleetopsWebhookIngestController()->ingest($request, 'nonexistent-integration');
+
+    expect($response->getStatusCode())->toBe(403)
+        ->and($response->getData(true))->toBe(['error' => 'Invalid signature']);
+});
+
+test('rejects an invalid custom ingest HMAC before any business writes', function () {
+    $connection = fleetopsWebhookIngestBoot();
+    $connection->table('telematics')->insert(['uuid' => 'telematic-1', 'public_id' => 'telematic_test', 'company_uuid' => 'company-1', 'provider' => 'custom']);
+    $service     = new FleetOpsWebhookIngestServiceFake();
+    $idempotency = new FleetOpsWebhookIngestIdempotencyFake();
+    $request     = fleetopsWebhookIngestSignedRequest(['events' => [['type' => 'untrusted']]]);
+    $request->headers->set('X-Webhook-Signature', str_repeat('0', 64));
+    $request->headers->set('X-Idempotency-Key', 'untrusted-key');
+
+    $response = fleetopsWebhookIngestController($service, $idempotency)->ingest($request, 'telematic_test');
+
+    expect($response->getStatusCode())->toBe(403)
+        ->and($service->linked)->toBe([])
+        ->and($service->events)->toBe([])
+        ->and($service->sensors)->toBe([])
+        ->and($idempotency->processed)->toBe([])
+        // Authentication happens before any receipt is reserved.
+        ->and(Fleetbase\Tests\Support\WebhookReceiptDatabase::statuses($connection))->toBe([]);
+});
+
+test('rejects an ingest request if the integration webhook secret is absent', function () {
+    $connection = fleetopsWebhookIngestBoot();
+    $connection->table('telematics')->insert(['uuid' => 'telematic-1', 'public_id' => 'telematic_test', 'company_uuid' => 'company-1', 'provider' => 'custom']);
+    $service                = new FleetOpsWebhookIngestServiceFake();
+    $service->webhookSecret = null;
+    $request                = fleetopsWebhookIngestSignedRequest(['events' => [['type' => 'untrusted']]]);
+
+    $response = fleetopsWebhookIngestController($service)->ingest($request, 'telematic_test');
+
+    expect($response->getStatusCode())->toBe(403)
+        ->and($service->events)->toBe([])
+        ->and($service->linked)->toBe([]);
+});
+
+test('custom ingest signature is bound to the original request body', function () {
+    $connection = fleetopsWebhookIngestBoot();
+    $connection->table('telematics')->insert(['uuid' => 'telematic-1', 'public_id' => 'telematic_test', 'company_uuid' => 'company-1', 'provider' => 'custom']);
+    $service  = new FleetOpsWebhookIngestServiceFake();
+    $original = fleetopsWebhookIngestSignedRequest(['events' => [['type' => 'legitimate']]]);
+    $modified = Request::create('/x', 'POST', [], [], [], ['CONTENT_TYPE' => 'application/json'], json_encode(['events' => [['type' => 'modified']]], JSON_THROW_ON_ERROR));
+    $modified->headers->set('X-Webhook-Signature', $original->headers->get('X-Webhook-Signature'));
+
+    $response = fleetopsWebhookIngestController($service)->ingest($modified, 'telematic_test');
+
+    expect($response->getStatusCode())->toBe(403)
+        ->and($service->events)->toBe([])
+        ->and($service->linked)->toBe([]);
 });
