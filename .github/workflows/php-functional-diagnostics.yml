@@ -1,0 +1,103 @@
+# Diagnostic-only workflow for GST Fleetbase. This is intentionally NOT a release gate
+# and is not enabled for main. The security audit below MUST remain blocking.
+name: PHP functional diagnostics (NO GO)
+
+on:
+  pull_request:
+    branches:
+      - security/gstfleet-webhook-auth-v075
+
+permissions:
+  contents: read
+
+jobs:
+  php-functional:
+    name: PHP 8.2 / Pest / Xdebug (diagnostic only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      COMPOSER_PROCESS_TIMEOUT: "0"
+      COMPOSER_NO_INTERACTION: "1"
+    steps:
+      - name: Checkout exact PR code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP 8.2 + Xdebug
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: mbstring, xml, gd, zip, pdo_mysql, sockets, intl, bcmath, gmp
+          coverage: xdebug
+
+      - name: Install system dependencies (same as canonical PHP CI)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libzip-dev libgd-dev libfreetype6-dev libjpeg-dev libpng-dev imagemagick libmagickwand-dev libmemcached-dev libgeos-dev libgmp-dev default-mysql-client libicu-dev
+
+      - name: Configure read-only Composer GitHub API token
+        env:
+          GH_API_TOKEN: ${{ github.token }}
+        run: composer config --global github-oauth.github.com "$GH_API_TOKEN"
+
+      # This policy is written ONLY in the ephemeral GitHub Actions HOME.
+      # Do not copy into composer.json, Dockerfiles, production or a deployable lock.
+      # The single advisory remains visible to "composer audit" in the next job.
+      - name: Allow one legacy Laravel advisory for diagnostic resolution ONLY
+        run: |
+          composer --version
+          composer config --global --json policy.advisories.ignore-id '{"PKSA-zwc5-qtrz-zm1n":{"on-block":false,"reason":"GST temporary PHP CI diagnostics only; vulnerability is NOT accepted for production, and audit must still fail."}}'
+
+      - name: Validate Composer manifest
+        run: composer validate
+
+      - name: Install dependencies in disposable runner
+        run: composer install --prefer-dist --no-progress
+
+      - name: Upload resolved lock for independent security audit
+        if: ${{ always() && hashFiles('composer.lock') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gst-f8b-php-diagnostic-lock
+          path: composer.lock
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Check formatting without modifying code
+        run: composer test:lint
+
+      - name: Run isolated PHP test files
+        run: composer test:unit
+
+      - name: Measure Xdebug coverage
+        run: XDEBUG_MODE=coverage composer coverage:baseline
+
+      - name: Enforce 100 percent coverage
+        run: php scripts/coverage-summary.php coverage/clover.xml --fail-under=100
+
+  dependency-security:
+    name: Dependency security audit (MUST block release)
+    needs: php-functional
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      COMPOSER_NO_INTERACTION: "1"
+      COMPOSER_NO_AUDIT: "0"
+    steps:
+      - name: Checkout exact PR code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP and Composer
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          coverage: none
+
+      - name: Load exact resolved lock (fail if no lock was produced)
+        uses: actions/download-artifact@v4
+        with:
+          name: gst-f8b-php-diagnostic-lock
+          path: .
+
+      - name: Audit dependencies without any advisory exception
+        run: composer audit --locked --format=summary
