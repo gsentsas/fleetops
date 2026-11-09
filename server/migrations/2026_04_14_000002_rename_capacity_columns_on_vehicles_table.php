@@ -39,7 +39,8 @@ return new class extends Migration {
     {
         Schema::table('vehicles', function (Blueprint $table) {
             // Restore the dropped column
-            $table->unsignedDecimal('capacity_weight_kg', 10, 2)->nullable()->after('skills');
+            // Laravel 11 removed unsignedDecimal(); decimal()->unsigned() emits the same "decimal(p, s) unsigned" DDL.
+            $table->decimal('capacity_weight_kg', 10, 2)->unsigned()->nullable()->after('skills');
 
             // Reverse the renames
             $table->renameColumn('payload_capacity_volume', 'capacity_volume_m3');
