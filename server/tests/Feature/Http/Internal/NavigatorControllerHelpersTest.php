@@ -115,7 +115,7 @@ test('admin lookup and navigator credential helpers execute against the database
 
     $probe = new FleetOpsInternalNavigatorHelpersProbe();
 
-    $admin = $probe->callProtected('findAdminUser');
+    $admin = $probe->callProtected('findAdminUser', ['company-1']);
     expect($admin)->toBeInstanceOf(User::class)
         ->and($admin->uuid)->toBe('user-1');
 
