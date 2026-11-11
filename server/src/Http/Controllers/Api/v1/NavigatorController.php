@@ -34,7 +34,12 @@ class NavigatorController extends Controller
 
     protected function findCompanyByPublicId(string $companyId): ?Company
     {
-        return Company::select()->where('public_id', $companyId)->first();
+        $query = Company::select()->where('public_id', $companyId);
+        if ($credential = request()->attributes->get('navigator_credential')) {
+            $query->where('uuid', $credential->company_uuid);
+        }
+
+        return $query->first();
     }
 
     protected function driverOnboardSetting(string $companyUuid): mixed

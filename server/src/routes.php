@@ -50,7 +50,7 @@ Route::prefix(config('fleetops.api.routing.prefix'))->namespace('Fleetbase\Fleet
         |
         | End-user API routes, these are routes that the SDK and applications will interface with, and require API credentials.
         */
-        $router->group(['prefix' => 'v1', 'middleware' => ['fleetbase.api', Fleetbase\FleetOps\Http\Middleware\TransformLocationMiddleware::class], 'namespace' => 'Api\v1'], function ($router) {
+        $router->group(['prefix' => 'v1', 'middleware' => ['fleetbase.api', Fleetbase\FleetOps\Http\Middleware\NavigatorDriverScope::class, Fleetbase\FleetOps\Http\Middleware\TransformLocationMiddleware::class], 'namespace' => 'Api\v1'], function ($router) {
             // drivers routes
             $router->group(['prefix' => 'drivers', 'middleware' => []], function () use ($router) {
                 $router->post('register-device', 'DriverController@registerDevice');
@@ -428,9 +428,11 @@ Route::prefix(config('fleetops.api.routing.prefix'))->namespace('Fleetbase\Fleet
                     ['prefix' => 'v1/fleet-ops/navigator', 'namespace' => 'v1'],
                     function ($router) {
                         // Opened from the Navigator app's QR scan without a session;
-                        // NavigatorController::linkApp() requires a valid signature.
+                        // NavigatorController::linkApp() requires a single-use token.
                         $router->get('link-app', 'NavigatorController@linkApp');
                         $router->get('get-link-app', 'NavigatorController@getLinkAppUrl')->middleware(['fleetbase.protected']);
+                        $router->delete('pairings/{uuid}', 'NavigatorController@revokePairing')->middleware(['fleetbase.protected']);
+                        $router->post('pairings/{uuid}/rotate', 'NavigatorController@rotatePairing')->middleware(['fleetbase.protected']);
                     }
                 );
 

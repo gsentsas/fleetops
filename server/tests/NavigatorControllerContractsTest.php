@@ -20,11 +20,48 @@ if (!function_exists('url')) {
 }
 
 use Fleetbase\FleetOps\Http\Controllers\Internal\v1\NavigatorController;
+use Fleetbase\FleetOps\Support\NavigatorLinkTokenService;
 use Fleetbase\Http\Resources\Organization;
 use Fleetbase\Models\ApiCredential;
 use Fleetbase\Models\Company;
 use Fleetbase\Models\User;
 use Illuminate\Http\Request;
+
+// Laravel 12 types its global response() helper; use the package's isolated
+// response factory directly for these synthetic controller response contracts.
+if (!function_exists('Fleetbase\FleetOps\Http\Controllers\Internal\v1\response')) {
+    eval('namespace Fleetbase\\FleetOps\\Http\\Controllers\\Internal\\v1; function response() { return \\app(\\Illuminate\\Contracts\\Routing\\ResponseFactory::class); }');
+}
+if (!function_exists('Fleetbase\FleetOps\Http\Controllers\Internal\v1\url')) {
+    eval('namespace Fleetbase\\FleetOps\\Http\\Controllers\\Internal\\v1; function url($path = "") { return "http://localhost/" . ltrim($path, "/"); }');
+}
+
+class FleetOpsNavigatorTokenFake extends NavigatorLinkTokenService
+{
+    public array $validTokens = [];
+    public array $issuedTo = [];
+
+    public function issue(User $issuer): string
+    {
+        $this->issuedTo[] = [$issuer->uuid, $issuer->company_uuid];
+
+        return str_repeat('a', 64);
+    }
+
+    public function redeem(string $token): ?User
+    {
+        $issuer = $this->validTokens[$token] ?? null;
+        unset($this->validTokens[$token]);
+
+        return $issuer;
+    }
+
+    public function redeemWith(string $token, \Closure $issue): mixed
+    {
+        $issuer = $this->redeem($token);
+        return $issuer && $issuer->company ? $issue($issuer) : null;
+    }
+}
 
 class FleetOpsNavigatorControllerProbe extends NavigatorController
 {
@@ -35,10 +72,16 @@ class FleetOpsNavigatorControllerProbe extends NavigatorController
     public array $redirects              = [];
     public array $credentialLookups      = [];
     public array $organizationLookups    = [];
+    public FleetOpsNavigatorTokenFake $tokens;
 
-    protected function findAdminUser(): ?User
+    protected function navigatorLinkIssuer(): ?User
     {
         return $this->adminUser;
+    }
+
+    protected function navigatorLinkTokens(): NavigatorLinkTokenService
+    {
+        return $this->tokens ??= new FleetOpsNavigatorTokenFake();
     }
 
     protected function firstOrCreateNavigatorCredential(User $adminUser): ApiCredential
@@ -46,6 +89,16 @@ class FleetOpsNavigatorControllerProbe extends NavigatorController
         $this->credentialLookups[] = ['navigator', $adminUser->uuid, $adminUser->company_uuid];
 
         return $this->apiCredential;
+    }
+
+    // Response-contract double; real authorization runs in Fleet integration Rc1NavigatorMySqlTest.
+    protected function validNavigatorCredential(ApiCredential $credential): bool
+    {
+        return $credential->purpose === 'navigator'
+            && $credential->company_uuid === $this->adminUser?->company_uuid
+            && $credential->issuer_user_uuid === $this->adminUser?->uuid
+            && $credential->user_uuid === 'device-uuid'
+            && !$credential->trashed() && !$credential->hasExpired();
     }
 
     protected function secureRootUrl(): string
@@ -77,7 +130,7 @@ class FleetOpsNavigatorControllerProbe extends NavigatorController
     {
         $this->redirects[] = $url;
 
-        return response()->json(['redirect' => $url]);
+        return new \Illuminate\Http\JsonResponse(['redirect' => $url]);
     }
 
     protected function findApiCredentialForToken(?string $token, string $connection, bool $isSecretKey): ?ApiCredential
@@ -106,6 +159,8 @@ function fleetopsNavigatorUser(?Company $company = null): User
     $user->setRawAttributes([
         'uuid'         => 'user-uuid',
         'company_uuid' => $company?->uuid,
+        'type'         => 'admin',
+        'status'       => 'active',
     ], true);
     $user->setRelation('company', $company);
 
@@ -127,8 +182,13 @@ function fleetopsNavigatorCompany(): Company
 function fleetopsNavigatorCredential(string $key = 'flb_live_key'): ApiCredential
 {
     $credential = new ApiCredential();
+    $credential->setDateFormat('Y-m-d H:i:s');
     $credential->setRawAttributes([
         'uuid'         => 'credential-uuid',
+        'user_uuid'    => 'device-uuid',
+        'issuer_user_uuid' => 'user-uuid',
+        'purpose'      => 'navigator',
+        'expires_at'   => now()->addDay()->toDateTimeString(),
         'key'          => $key,
         'secret'       => '$secret',
         'company_uuid' => 'company-uuid',
@@ -137,11 +197,9 @@ function fleetopsNavigatorCredential(string $key = 'flb_live_key'): ApiCredentia
     return $credential;
 }
 
-function fleetopsNavigatorSignedQuery(): array
+function fleetopsNavigatorTokenQuery(string $value = 'a'): array
 {
-    $expires = time() + 600;
-
-    return ['expires' => $expires, 'signature' => NavigatorController::linkSignature($expires)];
+    return ['token' => str_repeat($value, 64)];
 }
 
 test('navigator controller builds android and ios app link redirects', function () {
@@ -149,12 +207,15 @@ test('navigator controller builds android and ios app link redirects', function 
     $controller                = new FleetOpsNavigatorControllerProbe();
     $controller->adminUser     = fleetopsNavigatorUser($company);
     $controller->apiCredential = fleetopsNavigatorCredential('flb_live_navigator');
+    $controller->tokens = new FleetOpsNavigatorTokenFake();
+    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
+    $controller->tokens->validTokens[str_repeat('b', 64)] = $controller->adminUser;
 
-    $android = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorSignedQuery(), [], [], [
+    $android = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery(), [], [], [
         'HTTP_USER_AGENT' => 'Mozilla/5.0 Android',
     ]))->getData(true);
 
-    $ios = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorSignedQuery(), [], [], [
+    $ios = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery('b'), [], [], [
         'HTTP_USER_AGENT' => 'Mozilla/5.0 iPhone',
     ]))->getData(true);
 
@@ -172,13 +233,84 @@ test('navigator controller builds android and ios app link redirects', function 
         ]);
 });
 
+test('navigator controller blocks cross-tenant and wrong-subject credentials', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->tokens = new FleetOpsNavigatorTokenFake();
+    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
+
+    $credential = fleetopsNavigatorCredential('flb_live_wrong_company');
+    $credential->company_uuid = 'other-company';
+    $controller->apiCredential = $credential;
+
+    $denied = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery()));
+
+    expect($denied->getStatusCode())->toBe(403)
+        ->and($controller->redirects)->toBe([]);
+
+    $controller->tokens->validTokens[str_repeat('b', 64)] = $controller->adminUser;
+    $credential->company_uuid = 'company-uuid';
+    $credential->user_uuid = 'other-user';
+
+    $deniedSubject = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery('b')));
+
+    expect($deniedSubject->getStatusCode())->toBe(403)
+        ->and($controller->redirects)->toBe([]);
+});
+
+test('navigator controller refuses expired or revoked credentials before mobile redirect', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->tokens = new FleetOpsNavigatorTokenFake();
+
+    $expired = fleetopsNavigatorCredential('flb_live_expired');
+    $expired->expires_at = now()->subMinute();
+    $controller->apiCredential = $expired;
+    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
+
+    $deniedExpired = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery()));
+
+    expect($deniedExpired->getStatusCode())->toBe(403)
+        ->and($controller->redirects)->toBe([]);
+
+    $revoked = fleetopsNavigatorCredential('flb_live_revoked');
+    $revoked->setRawAttributes(array_merge($revoked->getAttributes(), [
+        'deleted_at' => now()->subMinute()->toDateTimeString(),
+    ]), true);
+    $controller->apiCredential = $revoked;
+    $controller->tokens->validTokens[str_repeat('b', 64)] = $controller->adminUser;
+
+    $deniedRevoked = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery('b')));
+
+    expect($deniedRevoked->getStatusCode())->toBe(403)
+        ->and($controller->redirects)->toBe([]);
+});
+
+test('navigator controller refuses replay of a previously redeemed link', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->apiCredential = fleetopsNavigatorCredential();
+    $controller->tokens = new FleetOpsNavigatorTokenFake();
+    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
+
+    $request = Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery());
+    $accepted = $controller->linkApp($request);
+    $replayed = $controller->linkApp($request);
+
+    expect($accepted->getData(true)['redirect'])->toStartWith('flbnavigator://')
+        ->and($replayed->getStatusCode())->toBe(403)
+        ->and($controller->credentialLookups)->toHaveCount(1);
+});
+
 test('navigator controller returns missing organization error when no admin company is available', function () {
     $controller            = new FleetOpsNavigatorControllerProbe();
     $controller->adminUser = fleetopsNavigatorUser(null);
+    $controller->tokens = new FleetOpsNavigatorTokenFake();
+    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
 
-    $response = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorSignedQuery()));
+    $response = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery()));
 
-    expect($response->getData(true))->toBe(['error' => 'Organization for linking not found.']);
+    expect($response->getStatusCode())->toBe(403);
 });
 
 test('navigator controller refuses unsigned, tampered and expired app links before touching credentials', function () {
@@ -187,11 +319,10 @@ test('navigator controller refuses unsigned, tampered and expired app links befo
     $controller->adminUser     = fleetopsNavigatorUser($company);
     $controller->apiCredential = fleetopsNavigatorCredential('flb_live_navigator');
 
-    $expired  = time() - 60;
     $requests = [
         'unsigned' => Request::create('/navigator/link-app', 'GET'),
-        'tampered' => Request::create('/navigator/link-app', 'GET', ['signature' => 'forged'] + fleetopsNavigatorSignedQuery()),
-        'expired'  => Request::create('/navigator/link-app', 'GET', ['expires' => $expired, 'signature' => NavigatorController::linkSignature($expired)]),
+        'tampered' => Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery('f')),
+        'legacy'   => Request::create('/navigator/link-app', 'GET', ['expires' => time() + 600, 'signature' => str_repeat('f', 64)]),
     ];
 
     foreach ($requests as $request) {
@@ -205,7 +336,9 @@ test('navigator controller refuses unsigned, tampered and expired app links befo
 test('navigator controller exposes link url settings and current organization token lookup branches', function () {
     $controller                = new FleetOpsNavigatorControllerProbe();
     $controller->apiCredential = fleetopsNavigatorCredential('flb_test_key');
+    $controller->apiCredential->purpose = null;
     $controller->organization  = fleetopsNavigatorCompany();
+    $controller->adminUser = fleetopsNavigatorUser($controller->organization);
     $controller->settings      = ['enabled' => true, 'invite_code_required' => false];
 
     $linkUrl  = $controller->getLinkAppUrl()->getData(true);
@@ -225,8 +358,8 @@ test('navigator controller exposes link url settings and current organization to
     parse_str((string) parse_url($linkUrl['linkUrl'], PHP_URL_QUERY), $linkQuery);
 
     expect($linkUrl['linkUrl'])->toStartWith('http://localhost/int/v1/fleet-ops/navigator/link-app?')
-        ->and($linkQuery['signature'])->toBe(NavigatorController::linkSignature((int) $linkQuery['expires']))
-        ->and((int) $linkQuery['expires'])->toBeGreaterThan(time())
+        ->and($linkQuery)->toBe(fleetopsNavigatorTokenQuery())
+        ->and($controller->tokens->issuedTo)->toBe([['user-uuid', 'company-uuid']])
         ->and($settings)->toBe(['enabled' => true, 'invite_code_required' => false])
         ->and($organization)->toBeInstanceOf(Organization::class)
         ->and($controller->credentialLookups)->toContain(
