@@ -129,6 +129,54 @@ test('admin lookup and navigator credential helpers execute against the database
     expect($connection->table('api_credentials')->count())->toBe(1);
 });
 
+/**
+ * S85 RED security gate: the legitimate issuer is company B while company A
+ * has been inserted first. A link may never select a global first admin.
+ *
+ * Expected to FAIL against the pinned pre-fix controller. Keep it RED until
+ * the signed, single-use link context is bound to B by the implementation.
+ */
+test('navigator issuer lookup never selects the first admin from another tenant', function () {
+    $connection = fleetopsInternalNavigatorHelpersBoot();
+    $connection->table('companies')->insert([
+        ['uuid' => 'company-a', 'name' => 'First Tenant'],
+        ['uuid' => 'company-b', 'name' => 'Issuer Tenant'],
+    ]);
+    $connection->table('users')->insert([
+        ['uuid' => 'user-a', 'company_uuid' => 'company-a', 'type' => 'admin'],
+        ['uuid' => 'user-b', 'company_uuid' => 'company-b', 'type' => 'admin'],
+    ]);
+
+    // The issuer's company must be derived from the authenticated, signed
+    // issuance record; this test supplies that required tenant explicitly.
+    session(['company' => 'company-b']);
+    $probe = new FleetOpsInternalNavigatorHelpersProbe();
+    $admin = $probe->callProtected('findAdminUser', ['company-b']);
+
+    expect($admin)->toBeInstanceOf(User::class)
+        ->and($admin->company_uuid)->toBe('company-b')
+        ->and($admin->uuid)->toBe('user-b');
+});
+
+/**
+ * S85 RED security gate: the absence of an issuer in the selected tenant
+ * must fail closed, even if another tenant has an administrator.
+ */
+test('navigator issuer lookup fails closed without a tenant admin', function () {
+    $connection = fleetopsInternalNavigatorHelpersBoot();
+    $connection->table('companies')->insert([
+        ['uuid' => 'company-a', 'name' => 'Other Tenant'],
+        ['uuid' => 'company-b', 'name' => 'No Admin Tenant'],
+    ]);
+    $connection->table('users')->insert([
+        ['uuid' => 'user-a', 'company_uuid' => 'company-a', 'type' => 'admin'],
+    ]);
+
+    session(['company' => 'company-b']);
+    $probe = new FleetOpsInternalNavigatorHelpersProbe();
+    expect($probe->callProtected('findAdminUser', ['company-b']))->toBeNull();
+});
+
 test('deep link configuration helpers read url config and environment values', function () {
     fleetopsInternalNavigatorHelpersBoot();
     FleetOpsNavigatorHelpersEnv::$values = [
