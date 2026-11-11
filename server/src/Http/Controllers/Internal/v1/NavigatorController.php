@@ -64,6 +64,8 @@ class NavigatorController extends Controller
         if (!$apiCredential
             || $apiCredential->company_uuid !== $adminUser->company_uuid
             || $apiCredential->user_uuid !== $adminUser->uuid
+            || $apiCredential->trashed()
+            || $apiCredential->hasExpired()
             || !is_string($apiCredential->key)
             || $apiCredential->key === '') {
             return response()->error('Navigator credential does not match its issuing organization.', 403);
