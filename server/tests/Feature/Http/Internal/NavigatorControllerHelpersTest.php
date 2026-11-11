@@ -122,11 +122,17 @@ test('admin lookup and navigator credential helpers execute against the database
     $credential = $probe->callProtected('firstOrCreateNavigatorCredential', [$admin]);
     expect($credential)->toBeInstanceOf(ApiCredential::class)
         ->and($connection->table('api_credentials')->count())->toBe(1)
-        ->and($connection->table('api_credentials')->value('name'))->toBe('NavigationAppLinker');
+        ->and($credential->company_uuid)->toBe('company-1')
+        ->and($credential->user_uuid)->toBe('user-1')
+        ->and($credential->name)->toStartWith('NavigatorPairing-')
+        ->and($credential->expires_at)->not->toBeNull();
 
-    // Re-invocation reuses the existing credential
-    $probe->callProtected('firstOrCreateNavigatorCredential', [$admin]);
-    expect($connection->table('api_credentials')->count())->toBe(1);
+    // New pairing must get a different, independently revocable credential.
+    $second = $probe->callProtected('firstOrCreateNavigatorCredential', [$admin]);
+    expect($connection->table('api_credentials')->count())->toBe(2)
+        ->and($second->name)->toStartWith('NavigatorPairing-')
+        ->and($second->name)->not->toBe($credential->name)
+        ->and($second->expires_at)->not->toBeNull();
 });
 
 /**
