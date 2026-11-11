@@ -136,6 +136,9 @@ class OrderController extends FleetOpsController
                 $request,
                 function ($request, &$input) {
                     $serviceQuote = ServiceQuote::resolveFromRequest($request);
+                    if (ServiceQuote::hasReferenceInRequest($request) && !$serviceQuote) {
+                        throw new FleetbaseRequestValidationException(['service_quote' => 'Invalid service quote for this company.']);
+                    }
 
                     $this->normalizeCustomerType($input);
 
@@ -194,6 +197,9 @@ class OrderController extends FleetOpsController
                     $input                   = $request->input('order');
                     $isIntegratedVendorOrder = isset($requestInput['integrated_vendor_order']);
                     $serviceQuote            = ServiceQuote::resolveFromRequest($request);
+                    if (ServiceQuote::hasReferenceInRequest($request) && !$serviceQuote) {
+                        throw new FleetbaseRequestValidationException(['service_quote' => 'Invalid service quote for this company.']);
+                    }
 
                     $route               = Utils::get($input, 'route');
                     $payload             = Utils::get($input, 'payload');

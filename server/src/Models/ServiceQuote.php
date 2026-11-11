@@ -138,6 +138,13 @@ class ServiceQuote extends Model
         return Lalamove::serviceQuoteFromQuotation($quotation);
     }
 
+    public static function hasReferenceInRequest(Request|CreateOrderRequest|UpdateOrderRequest $request): bool
+    {
+        $reference = $request->or(['order.service_quote_uuid', 'service_quote', 'service_quote_id', 'order.service_quote']);
+
+        return $reference !== null && $reference !== '' && $reference !== false;
+    }
+
     public static function resolveFromRequest(Request|CreateOrderRequest|UpdateOrderRequest $request): ?ServiceQuote
     {
         $serviceQuote = $request->or(['order.service_quote_uuid', 'service_quote', 'service_quote_id', 'order.service_quote']);

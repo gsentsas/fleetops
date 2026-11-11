@@ -36,6 +36,12 @@ function resolveQuote(string $id): ?ServiceQuote {
     };
     return ServiceQuote::resolveFromRequest($r);
 }
+check(ServiceQuote::hasReferenceInRequest(new class extends Request {
+    public function or(array $keys, mixed $default = null): mixed { return null; }
+}) === false, 'OPTIONAL_NO_QUOTE_ACCEPTED');
+check(ServiceQuote::hasReferenceInRequest(new class extends Request {
+    public function or(array $keys, mixed $default = null): mixed { return 'quote_BBBBBBBB'; }
+}) === true, 'EXPLICIT_QUOTE_DETECTED');
 session(['company' => 'company-a']);
 check(resolveQuote('11111111-1111-4111-8111-111111111111')?->company_uuid === 'company-a', 'UUID_OWN_QUOTE');
 check(resolveQuote('22222222-2222-4222-8222-222222222222') === null, 'UUID_FOREIGN_DENIED');

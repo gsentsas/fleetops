@@ -753,6 +753,11 @@ class CustomerController extends Controller
             return response()->apiError('No order config available for this company.', 422);
         }
 
+        // Validate the selected quote before building payloads or creating an order.
+        if (ServiceQuote::hasReferenceInRequest($request) && !$this->resolveServiceQuote($request)) {
+            return response()->apiError('Invalid service quote for this company.', 422);
+        }
+
         // Build the Payload (matching the operator OrderController convention).
         // - `payload` may be an array of {pickup, dropoff, return, waypoints, entities}
         // - `payload` may be a string public_id referencing an existing Payload

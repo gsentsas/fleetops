@@ -1,0 +1,26 @@
+name: RC1 Service Quote Tenant Gate
+on:
+  pull_request:
+    paths:
+      - 'server/src/Models/ServiceQuote.php'
+      - 'server/src/Http/Controllers/Api/v1/OrderController.php'
+      - 'server/src/Http/Controllers/Internal/v1/OrderController.php'
+      - 'server/src/Http/Controllers/Api/v1/CustomerController.php'
+      - 'server/tests/check-rc1-quote-boundary.py'
+      - '.github/workflows/rc1-quote-request-gate.yml'
+  workflow_dispatch:
+jobs:
+  quote-tenant-contract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify quote tenant guards
+        run: python3 server/tests/check-rc1-quote-boundary.py
+      - name: PHP syntax check
+        run: |
+          set -eu
+          for file in server/src/Models/ServiceQuote.php server/src/Http/Controllers/Api/v1/OrderController.php server/src/Http/Controllers/Internal/v1/OrderController.php server/src/Http/Controllers/Api/v1/CustomerController.php; do
+            php -l "$file"
+          done
