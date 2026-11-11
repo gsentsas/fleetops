@@ -177,6 +177,72 @@ test('navigator issuer lookup fails closed without a tenant admin', function () 
     expect($probe->callProtected('findAdminUser', ['company-b']))->toBeNull();
 });
 
+function fleetopsNavigatorLinkTokenTable(SQLiteConnection $connection): void
+{
+    $connection->getSchemaBuilder()->create('fleetops_navigator_link_tokens', function ($table) {
+        $table->bigIncrements('id');
+        $table->string('token_hash', 64)->unique();
+        $table->string('company_uuid', 36);
+        $table->string('issuer_user_uuid', 36);
+        $table->dateTime('expires_at');
+        $table->dateTime('consumed_at')->nullable();
+        $table->timestamps();
+    });
+}
+
+test('navigator one-time link binds issuer to company B and rejects replay', function () {
+    $connection = fleetopsInternalNavigatorHelpersBoot();
+    fleetopsNavigatorLinkTokenTable($connection);
+    $connection->table('companies')->insert([
+        ['uuid' => 'company-a', 'name' => 'First Company'],
+        ['uuid' => 'company-b', 'name' => 'Issuer Company'],
+    ]);
+    $connection->table('users')->insert([
+        ['uuid' => 'user-a', 'company_uuid' => 'company-a', 'type' => 'admin'],
+        ['uuid' => 'user-b', 'company_uuid' => 'company-b', 'type' => 'admin'],
+    ]);
+
+    $service = new \Fleetbase\\FleetOps\\Support\\NavigatorLinkTokenService();
+    $issuer = User::where('uuid', 'user-b')->firstOrFail();
+    $token = $service->issue($issuer);
+
+    expect(strlen($token))->toBe(64)
+        ->and($connection->table('fleetops_navigator_link_tokens')->count())->toBe(1)
+        ->and($connection->table('fleetops_navigator_link_tokens')->value('token_hash'))->toBe(hash('sha256', $token))
+        ->and($connection->table('fleetops_navigator_link_tokens')->value('company_uuid'))->toBe('company-b')
+        ->and($connection->table('fleetops_navigator_link_tokens')->value('issuer_user_uuid'))->toBe('user-b');
+
+    $redeemed = $service->redeem($token);
+    expect($redeemed)->toBeInstanceOf(User::class)
+        ->and($redeemed->uuid)->toBe('user-b')
+        ->and($redeemed->company_uuid)->toBe('company-b')
+        ->and($service->redeem($token))->toBeNull()
+        ->and($connection->table('fleetops_navigator_link_tokens')->whereNotNull('consumed_at')->count())->toBe(1);
+});
+
+test('navigator one-time link rejects tampered expired and disabled issuer tokens', function () {
+    $connection = fleetopsInternalNavigatorHelpersBoot();
+    fleetopsNavigatorLinkTokenTable($connection);
+    $connection->table('companies')->insert(['uuid' => 'company-b', 'name' => 'Issuer']);
+    $connection->table('users')->insert(['uuid' => 'user-b', 'company_uuid' => 'company-b', 'type' => 'admin']);
+
+    $service = new \Fleetbase\\FleetOps\\Support\\NavigatorLinkTokenService();
+    $token = $service->issue(User::where('uuid', 'user-b')->firstOrFail());
+
+    expect($service->redeem(str_repeat('0', 64)))->toBeNull()
+        ->and($service->redeem(strtoupper($token)))->toBeNull()
+        ->and($service->redeem('short'))->toBeNull();
+
+    $connection->table('users')->where('uuid', 'user-b')->update(['type' => 'driver']);
+    expect($service->redeem($token))->toBeNull()
+        ->and($connection->table('fleetops_navigator_link_tokens')->whereNull('consumed_at')->count())->toBe(1);
+
+    $connection->table('users')->where('uuid', 'user-b')->update(['type' => 'admin']);
+    $connection->table('fleetops_navigator_link_tokens')->update(['expires_at' => now()->subMinute()->toDateTimeString()]);
+    expect($service->redeem($token))->toBeNull()
+        ->and($connection->table('fleetops_navigator_link_tokens')->whereNull('consumed_at')->count())->toBe(1);
+});
+
 test('deep link configuration helpers read url config and environment values', function () {
     fleetopsInternalNavigatorHelpersBoot();
     FleetOpsNavigatorHelpersEnv::$values = [
