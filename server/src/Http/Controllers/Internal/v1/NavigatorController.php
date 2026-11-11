@@ -193,18 +193,17 @@ class NavigatorController extends Controller
 
     protected function firstOrCreateNavigatorCredential(User $adminUser): ApiCredential
     {
-        return ApiCredential::firstOrCreate(
-            [
-                'user_uuid'    => $adminUser->uuid,
-                'company_uuid' => $adminUser->company_uuid,
-                'name'         => 'NavigationAppLinker',
-            ],
-            [
-                'user_uuid'    => $adminUser->uuid,
-                'company_uuid' => $adminUser->company->uuid,
-                'name'         => 'NavigationAppLinker',
-            ]
-        );
+        // Never reuse a shared, indefinite admin API key across mobile pairings.
+        // Each successful one-time link receives an independently revocable key.
+        // The 7-day limit is a temporary security ceiling pending a reviewed
+        // device renewal/scoped-identity protocol; it does NOT make an admin key
+        // least-privilege or cryptographically device-bound.
+        return ApiCredential::create([
+            'user_uuid'    => $adminUser->uuid,
+            'company_uuid' => $adminUser->company_uuid,
+            'name'         => 'NavigatorPairing-' . bin2hex(random_bytes(16)),
+            'expires_at'   => now()->addDays(7)->toDateTimeString(),
+        ]);
     }
 
     protected function secureRootUrl(): string
