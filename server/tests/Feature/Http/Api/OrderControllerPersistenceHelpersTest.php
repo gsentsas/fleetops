@@ -160,7 +160,7 @@ test('finalize dispatch and driving distance helpers execute their seams', funct
     fleetopsOrderPersistenceBoot();
     $probe = new FleetOpsOrderPersistenceProbe();
 
-    $probe->callHelper('dispatchFinalizeApiOrderCreation', 'order-1', 'sq-1', true);
+    $probe->callHelper('dispatchFinalizeApiOrderCreation', 'order-1', 'sq-1', true, 'company-1');
     expect(DispatchRecorder::$dispatched)->toHaveCount(1);
 
     // Without a configured road provider the delegation returns the straight-line estimate

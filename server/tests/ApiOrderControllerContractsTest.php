@@ -173,9 +173,9 @@ class FleetOpsApiOrderCrudControllerProbe extends OrderController
         return $this->order;
     }
 
-    protected function dispatchFinalizeApiOrderCreation(string $orderUuid, ?string $serviceQuoteUuid, bool $shouldDispatch): void
+    protected function dispatchFinalizeApiOrderCreation(string $orderUuid, ?string $serviceQuoteUuid, bool $shouldDispatch, string $companyUuid): void
     {
-        $this->finalizedOrders[] = [$orderUuid, $serviceQuoteUuid, $shouldDispatch];
+        $this->finalizedOrders[] = [$orderUuid, $serviceQuoteUuid, $shouldDispatch, $companyUuid];
     }
 
     protected function resolveSubject(Order $order, ?string $type, ?string $subjectId = null): mixed
@@ -721,7 +721,7 @@ test('api order controller creates orders with payloads assignments customers an
             'orchestrator_priority'   => 50,
         ])
         ->and($controller->finalizedOrders)->toBe([
-            ['created-order-uuid', 'service-quote-uuid', true],
+            ['created-order-uuid', 'service-quote-uuid', true, 'company-uuid'],
         ])
         ->and($controller->order->loaded)->toContain(['trackingNumber', 'trackingStatuses', 'driverAssigned', 'vehicleAssigned', 'purchaseRate.serviceQuote.items', 'customer', 'facilitator']);
 });

@@ -15,20 +15,22 @@ test('order workflows dispatch named queue jobs instead of signed closures', fun
         ->toContain(')->afterCommit()')
         ->and($internalController)
         ->not->toContain('dispatch(function')
-        ->toContain('FinalizeInternalOrderCreation::dispatch($order->uuid)->afterCommit()')
+        ->toContain('FinalizeInternalOrderCreation::dispatch($order->uuid, $order->company_uuid)->afterCommit()')
         ->toContain('$this->dispatchBulkAssignedDriverNotification($orderUuids->all(), $driver)')
         ->toContain('NotifyBulkAssignedDriver::dispatch($orderUuids, $driver->uuid)->afterCommit()');
 });
 
 test('order queue jobs serialize only scalar identifiers and options', function () {
-    $apiJob      = new FinalizeApiOrderCreation('order-uuid', 'service-quote-uuid', true);
-    $internalJob = new FinalizeInternalOrderCreation('order-uuid');
+    $apiJob      = new FinalizeApiOrderCreation('order-uuid', 'service-quote-uuid', true, 'company-uuid');
+    $internalJob = new FinalizeInternalOrderCreation('order-uuid', 'company-uuid');
     $bulkJob     = new NotifyBulkAssignedDriver(['order-uuid-1', 'order-uuid-2'], 'driver-uuid');
 
     expect($apiJob)->toBeInstanceOf(ShouldQueue::class)
         ->and($apiJob->orderUuid)->toBe('order-uuid')
         ->and($apiJob->serviceQuoteUuid)->toBe('service-quote-uuid')
         ->and($apiJob->shouldDispatch)->toBeTrue()
+        ->and($apiJob->companyUuid)->toBe('company-uuid')
+        ->and($internalJob->companyUuid)->toBe('company-uuid')
         ->and($internalJob)->toBeInstanceOf(ShouldQueue::class)
         ->and($internalJob->orderUuid)->toBe('order-uuid')
         ->and($bulkJob)->toBeInstanceOf(ShouldQueue::class)

@@ -133,12 +133,12 @@ test('finalize internal order creation notifies and fires order ready', function
     $connection = fleetopsPurchaseObserverBoot();
     $connection->table('orders')->insert(['uuid' => 'order-1', 'company_uuid' => 'company-1', 'status' => 'created']);
 
-    (new FinalizeInternalOrderCreation('order-1'))->handle();
+    (new FinalizeInternalOrderCreation('order-1', 'company-1'))->handle();
     expect(collect(FleetOpsPurchaseObserverRecorder::$events)->first(fn ($event) => $event instanceof Fleetbase\FleetOps\Events\OrderReady))->not->toBeNull();
 
     // Missing orders exit without firing
     FleetOpsPurchaseObserverRecorder::$events = [];
-    (new FinalizeInternalOrderCreation('order-missing'))->handle();
+    (new FinalizeInternalOrderCreation('order-missing', 'company-1'))->handle();
     expect(FleetOpsPurchaseObserverRecorder::$events)->toBe([]);
 });
 

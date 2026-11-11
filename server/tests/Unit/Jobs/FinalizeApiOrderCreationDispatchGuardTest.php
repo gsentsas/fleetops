@@ -181,7 +181,7 @@ function fleetopsQueuedDispatchOrder(array $attributes = [], array $trackingCode
 
 function fleetopsRunQueuedDispatch(Order $order): FleetOpsQueuedDispatchJobProbe
 {
-    $job        = new FleetOpsQueuedDispatchJobProbe($order->uuid, null, true);
+    $job        = new FleetOpsQueuedDispatchJobProbe($order->uuid, null, true, 'company-uuid');
     $job->order = $order;
     $job->handle();
 

@@ -17,12 +17,14 @@ class FinalizeInternalOrderCreation implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    public function __construct(public string $orderUuid)
+    public function __construct(public string $orderUuid, public ?string $companyUuid = null)
     {
     }
 
     public function handle(): void
     {
+        $this->requireCompanyUuid();
+
         $order = $this->findOrder();
         if (!$order) {
             return;
@@ -35,7 +37,16 @@ class FinalizeInternalOrderCreation implements ShouldQueue
 
     protected function findOrder(): ?Order
     {
-        return Order::where('uuid', $this->orderUuid)->first();
+        return Order::where('uuid', $this->orderUuid)->where('company_uuid', $this->requireCompanyUuid())->first();
+    }
+
+    protected function requireCompanyUuid(): string
+    {
+        if (!isset($this->companyUuid) || !is_string($this->companyUuid) || $this->companyUuid === '') {
+            throw new \RuntimeException('Queued order finalization is missing its tenant.');
+        }
+
+        return $this->companyUuid;
     }
 
     protected function fireOrderReady(Order $order): void

@@ -602,7 +602,7 @@ test('notify bulk assigned driver updates orders and records notification failur
 });
 
 test('finalize api order creation job prepares optional dispatch and emits ready event', function () {
-    $missingOrderJob        = new FleetOpsFinalizeApiOrderCreationProbe('missing-order');
+    $missingOrderJob        = new FleetOpsFinalizeApiOrderCreationProbe('missing-order', null, false, 'company-uuid');
     $missingOrderJob->order = null;
     $missingOrderJob->handle();
 
@@ -613,9 +613,9 @@ test('finalize api order creation job prepares optional dispatch and emits ready
     $order->setRelation('trackingStatuses', collect());
 
     $serviceQuote = new ServiceQuote();
-    $serviceQuote->setRawAttributes(['uuid' => 'service-quote-uuid'], true);
+    $serviceQuote->setRawAttributes(['uuid' => 'service-quote-uuid', 'company_uuid' => 'company-uuid'], true);
 
-    $job               = new FleetOpsFinalizeApiOrderCreationProbe('order-uuid', 'service-quote-uuid', true);
+    $job               = new FleetOpsFinalizeApiOrderCreationProbe('order-uuid', 'service-quote-uuid', true, 'company-uuid');
     $job->order        = $order;
     $job->serviceQuote = $serviceQuote;
 
@@ -629,7 +629,7 @@ test('finalize api order creation job prepares optional dispatch and emits ready
     ])
         ->and($job->events)->toBe(['order-uuid']);
 
-    $withoutDispatch        = new FleetOpsFinalizeApiOrderCreationProbe('order-uuid', null, false);
+    $withoutDispatch        = new FleetOpsFinalizeApiOrderCreationProbe('order-uuid', null, false, 'company-uuid');
     $withoutDispatch->order = new FleetOpsFinalizeOrderFake();
     $withoutDispatch->order->setRawAttributes(['uuid' => 'order-uuid-no-dispatch'], true);
     $withoutDispatch->handle();
@@ -643,7 +643,7 @@ test('finalize api order creation job prepares optional dispatch and emits ready
 });
 
 test('finalize internal order creation job notifies driver and emits ready event', function () {
-    $missingOrderJob        = new FleetOpsFinalizeInternalOrderCreationProbe('missing-order');
+    $missingOrderJob        = new FleetOpsFinalizeInternalOrderCreationProbe('missing-order', 'company-uuid');
     $missingOrderJob->order = null;
     $missingOrderJob->handle();
 
@@ -652,7 +652,7 @@ test('finalize internal order creation job notifies driver and emits ready event
     $order = new FleetOpsFinalizeOrderFake();
     $order->setRawAttributes(['uuid' => 'internal-order-uuid'], true);
 
-    $job        = new FleetOpsFinalizeInternalOrderCreationProbe('internal-order-uuid');
+    $job        = new FleetOpsFinalizeInternalOrderCreationProbe('internal-order-uuid', 'company-uuid');
     $job->order = $order;
     $job->handle();
 
