@@ -202,7 +202,7 @@ test('navigator one-time link binds issuer to company B and rejects replay', fun
         ['uuid' => 'user-b', 'company_uuid' => 'company-b', 'type' => 'admin'],
     ]);
 
-    $service = new \Fleetbase\\FleetOps\\Support\\NavigatorLinkTokenService();
+    $service = new \Fleetbase\FleetOps\Support\NavigatorLinkTokenService();
     $issuer = User::where('uuid', 'user-b')->firstOrFail();
     $token = $service->issue($issuer);
 
@@ -226,7 +226,7 @@ test('navigator one-time link rejects tampered expired and disabled issuer token
     $connection->table('companies')->insert(['uuid' => 'company-b', 'name' => 'Issuer']);
     $connection->table('users')->insert(['uuid' => 'user-b', 'company_uuid' => 'company-b', 'type' => 'admin']);
 
-    $service = new \Fleetbase\\FleetOps\\Support\\NavigatorLinkTokenService();
+    $service = new \Fleetbase\FleetOps\Support\NavigatorLinkTokenService();
     $token = $service->issue(User::where('uuid', 'user-b')->firstOrFail());
 
     expect($service->redeem(str_repeat('0', 64)))->toBeNull()
