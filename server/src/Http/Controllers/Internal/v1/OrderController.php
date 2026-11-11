@@ -248,7 +248,7 @@ class OrderController extends FleetOpsController
                     // if service quote attached purchase
                     $order->purchaseServiceQuote($serviceQuote);
 
-                    FinalizeInternalOrderCreation::dispatch($order->uuid)->afterCommit();
+                    FinalizeInternalOrderCreation::dispatch($order->uuid, $order->company_uuid)->afterCommit();
                 }
             );
 

@@ -391,7 +391,8 @@ class OrderController extends Controller
         $this->dispatchFinalizeApiOrderCreation(
             $order->uuid,
             $serviceQuote instanceof ServiceQuote ? $serviceQuote->uuid : null,
-            $shouldDispatch
+            $shouldDispatch,
+            $order->company_uuid
         );
 
         // response the driver resource
@@ -2095,9 +2096,9 @@ class OrderController extends Controller
         return Order::create($input);
     }
 
-    protected function dispatchFinalizeApiOrderCreation(string $orderUuid, ?string $serviceQuoteUuid, bool $shouldDispatch): void
+    protected function dispatchFinalizeApiOrderCreation(string $orderUuid, ?string $serviceQuoteUuid, bool $shouldDispatch, string $companyUuid): void
     {
-        FinalizeApiOrderCreation::dispatch($orderUuid, $serviceQuoteUuid, $shouldDispatch)->afterCommit();
+        FinalizeApiOrderCreation::dispatch($orderUuid, $serviceQuoteUuid, $shouldDispatch, $companyUuid)->afterCommit();
     }
 
     protected function drivingDistanceAndTime(mixed $origin, mixed $destination): mixed
