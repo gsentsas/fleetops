@@ -6,7 +6,6 @@ namespace Fleetbase\FleetOps\Support;
 
 use Fleetbase\Models\User;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 /**
  * S86 foundation: atomic single-use Navigator provisioning links.
