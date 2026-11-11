@@ -133,8 +133,7 @@ test('admin lookup and navigator credential helpers execute against the database
  * S85 RED security gate: the legitimate issuer is company B while company A
  * has been inserted first. A link may never select a global first admin.
  *
- * Expected to FAIL against the pinned pre-fix controller. Keep it RED until
- * the signed, single-use link context is bound to B by the implementation.
+ * Regression coverage for the explicit company lookup introduced in S87.
  */
 test('navigator issuer lookup never selects the first admin from another tenant', function () {
     $connection = fleetopsInternalNavigatorHelpersBoot();
@@ -189,6 +188,38 @@ function fleetopsNavigatorLinkTokenTable(SQLiteConnection $connection): void
         $table->timestamps();
     });
 }
+
+test('navigator link issuance denies non-admin and mismatched company without database writes', function () {
+    $connection = fleetopsInternalNavigatorHelpersBoot();
+    fleetopsNavigatorLinkTokenTable($connection);
+    $connection->table('companies')->insert([
+        ['uuid' => 'company-a', 'name' => 'Company A'],
+        ['uuid' => 'company-b', 'name' => 'Company B'],
+    ]);
+    $connection->table('users')->insert([
+        ['uuid' => 'user-a', 'company_uuid' => 'company-a', 'type' => 'driver'],
+        ['uuid' => 'user-b', 'company_uuid' => 'company-b', 'type' => 'admin'],
+    ]);
+
+    $service = new \\Fleetbase\\FleetOps\\Support\\NavigatorLinkTokenService();
+
+    try {
+        $service->issue(User::where('uuid', 'user-a')->firstOrFail());
+        throw new \\LogicException('Non-admin must be rejected');
+    } catch (\\RuntimeException $exception) {
+        expect($connection->table('fleetops_navigator_link_tokens')->count())->toBe(0);
+    }
+
+    $issuer = User::where('uuid', 'user-b')->firstOrFail();
+    $issuer->setRelation('company', Company::where('uuid', 'company-a')->firstOrFail());
+
+    try {
+        $service->issue($issuer);
+        throw new \\LogicException('Mismatched issuer company must be rejected');
+    } catch (\\RuntimeException $exception) {
+        expect($connection->table('fleetops_navigator_link_tokens')->count())->toBe(0);
+    }
+});
 
 test('navigator one-time link binds issuer to company B and rejects replay', function () {
     $connection = fleetopsInternalNavigatorHelpersBoot();
