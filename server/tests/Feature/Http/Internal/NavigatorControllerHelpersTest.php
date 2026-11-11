@@ -201,12 +201,12 @@ test('navigator link issuance denies non-admin and mismatched company without da
         ['uuid' => 'user-b', 'company_uuid' => 'company-b', 'type' => 'admin'],
     ]);
 
-    $service = new \\Fleetbase\\FleetOps\\Support\\NavigatorLinkTokenService();
+    $service = new \Fleetbase\FleetOps\Support\NavigatorLinkTokenService();
 
     try {
         $service->issue(User::where('uuid', 'user-a')->firstOrFail());
-        throw new \\LogicException('Non-admin must be rejected');
-    } catch (\\RuntimeException $exception) {
+        throw new \LogicException('Non-admin must be rejected');
+    } catch (\RuntimeException $exception) {
         expect($connection->table('fleetops_navigator_link_tokens')->count())->toBe(0);
     }
 
@@ -215,8 +215,8 @@ test('navigator link issuance denies non-admin and mismatched company without da
 
     try {
         $service->issue($issuer);
-        throw new \\LogicException('Mismatched issuer company must be rejected');
-    } catch (\\RuntimeException $exception) {
+        throw new \LogicException('Mismatched issuer company must be rejected');
+    } catch (\RuntimeException $exception) {
         expect($connection->table('fleetops_navigator_link_tokens')->count())->toBe(0);
     }
 });
