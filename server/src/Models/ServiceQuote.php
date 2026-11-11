@@ -146,12 +146,24 @@ class ServiceQuote extends Model
             return null;
         }
 
+        // A quote reference is always resolved inside the authenticated
+        // company, including when requested by public ID. Fail closed when
+        // there is no active tenant context.
+        $companyUuid = session('company');
+        if (!is_string($companyUuid) || $companyUuid === '') {
+            return null;
+        }
+
         if (Str::isUuid($serviceQuote)) {
-            $serviceQuote = static::where('uuid', $serviceQuote)->first();
+            $serviceQuote = static::where('uuid', $serviceQuote)
+                ->where('company_uuid', $companyUuid)
+                ->first();
         }
 
         if (Utils::isPublicId($serviceQuote)) {
-            $serviceQuote = static::where('public_id', $serviceQuote)->first();
+            $serviceQuote = static::where('public_id', $serviceQuote)
+                ->where('company_uuid', $companyUuid)
+                ->first();
         }
 
         return $serviceQuote;
