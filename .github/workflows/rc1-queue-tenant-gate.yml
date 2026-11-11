@@ -1,0 +1,25 @@
+name: RC1 Queue Tenant Boundary Gate
+on:
+  pull_request:
+    paths:
+      - 'server/src/Jobs/Finalize*OrderCreation.php'
+      - 'server/src/Http/Controllers/Api/v1/OrderController.php'
+      - 'server/src/Http/Controllers/Internal/v1/OrderController.php'
+      - 'server/tests/check-rc1-queue-tenant-contract.py'
+      - '.github/workflows/rc1-queue-tenant-gate.yml'
+  workflow_dispatch:
+jobs:
+  queue-tenant-contract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert tenant boundary contract
+        run: python3 server/tests/check-rc1-queue-tenant-contract.py
+      - name: PHP syntax on security-sensitive files
+        run: |
+          set -eu
+          for file in server/src/Jobs/FinalizeApiOrderCreation.php server/src/Jobs/FinalizeInternalOrderCreation.php server/src/Http/Controllers/Api/v1/OrderController.php server/src/Http/Controllers/Internal/v1/OrderController.php; do
+            php -l "$file"
+          done
