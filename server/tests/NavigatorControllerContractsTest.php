@@ -158,6 +158,7 @@ function fleetopsNavigatorCredential(string $key = 'flb_live_key'): ApiCredentia
     $credential = new ApiCredential();
     $credential->setRawAttributes([
         'uuid'         => 'credential-uuid',
+        'user_uuid'    => 'user-uuid',
         'key'          => $key,
         'secret'       => '$secret',
         'company_uuid' => 'company-uuid',
@@ -200,6 +201,47 @@ test('navigator controller builds android and ios app link redirects', function 
             ['navigator', 'user-uuid', 'company-uuid'],
             ['navigator', 'user-uuid', 'company-uuid'],
         ]);
+});
+
+test('navigator controller blocks cross-tenant and wrong-subject credentials', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->tokens = new FleetOpsNavigatorTokenFake();
+    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
+
+    $credential = fleetopsNavigatorCredential('flb_live_wrong_company');
+    $credential->company_uuid = 'other-company';
+    $controller->apiCredential = $credential;
+
+    $denied = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery()));
+
+    expect($denied->getStatusCode())->toBe(403)
+        ->and($controller->redirects)->toBe([]);
+
+    $controller->tokens->validTokens[str_repeat('b', 64)] = $controller->adminUser;
+    $credential->company_uuid = 'company-uuid';
+    $credential->user_uuid = 'other-user';
+
+    $deniedSubject = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery('b')));
+
+    expect($deniedSubject->getStatusCode())->toBe(403)
+        ->and($controller->redirects)->toBe([]);
+});
+
+test('navigator controller refuses replay of a previously redeemed link', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->apiCredential = fleetopsNavigatorCredential();
+    $controller->tokens = new FleetOpsNavigatorTokenFake();
+    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
+
+    $request = Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery());
+    $accepted = $controller->linkApp($request);
+    $replayed = $controller->linkApp($request);
+
+    expect($accepted->getData(true)['redirect'])->toStartWith('flbnavigator://')
+        ->and($replayed->getStatusCode())->toBe(403)
+        ->and($controller->credentialLookups)->toHaveCount(1);
 });
 
 test('navigator controller returns missing organization error when no admin company is available', function () {
