@@ -3,6 +3,7 @@
 namespace Fleetbase\FleetOps\Http\Controllers\Internal\v1;
 
 use Fleetbase\FleetOps\Support\Utils;
+use Fleetbase\FleetOps\Support\NavigatorLinkTokenService;
 use Fleetbase\FleetOps\Traits\AuthorizesMethods;
 use Fleetbase\Http\Controllers\Controller;
 use Fleetbase\Http\Resources\Organization;
@@ -37,13 +38,20 @@ class NavigatorController extends Controller
      */
     public function linkApp(Request $request)
     {
-        // This route is opened from a phone without a console session, so it is
-        // authorised by the short-lived signature issued by getLinkAppUrl().
-        if (!$this->hasValidLinkSignature($request)) {
+        // The public redemption endpoint only accepts an opaque, single-use
+        // capability bound to the authenticated issuing company's admin.
+        // Legacy expires+signature links intentionally fail closed.
+        $token = $request->query('token');
+
+        if (!is_string($token)) {
             return response()->error('This Navigator link is invalid or has expired. Generate a new one from the console.', 403);
         }
 
-        $adminUser = $this->findAdminUser();
+        $adminUser = $this->navigatorLinkTokens()->redeem($token);
+
+        if (!$adminUser) {
+            return response()->error('This Navigator link is invalid or has expired. Generate a new one from the console.', 403);
+        }
 
         if (!$adminUser || !$adminUser->company) {
             return response()->error('Organization for linking not found.');
@@ -87,13 +95,20 @@ class NavigatorController extends Controller
      */
     public function getLinkAppUrl()
     {
-        $expires = now()->addMinutes(static::LINK_TTL_MINUTES)->getTimestamp();
+        $issuer = $this->navigatorLinkIssuer();
+
+        if (!$issuer || $issuer->type !== 'admin') {
+            return response()->error('Navigator link issuer is not authorized.', 403);
+        }
+
+        try {
+            $token = $this->navigatorLinkTokens()->issue($issuer);
+        } catch (\RuntimeException $exception) {
+            return response()->error('Navigator link issuer is not authorized.', 403);
+        }
 
         return response()->json([
-            'linkUrl' => url('int/v1/fleet-ops/navigator/link-app') . '?' . http_build_query([
-                'expires'   => $expires,
-                'signature' => static::linkSignature($expires),
-            ]),
+            'linkUrl' => url('int/v1/fleet-ops/navigator/link-app') . '?' . http_build_query(['token' => $token]),
         ]);
     }
 
@@ -139,9 +154,29 @@ class NavigatorController extends Controller
         return response()->json($onBoardSettings);
     }
 
-    protected function findAdminUser(): ?User
+    protected function navigatorLinkIssuer(): ?User
     {
-        return User::where('type', 'admin')->first();
+        $user = auth()->user();
+
+        return $user instanceof User ? $user : null;
+    }
+
+    protected function navigatorLinkTokens(): NavigatorLinkTokenService
+    {
+        return app(NavigatorLinkTokenService::class);
+    }
+
+    // Retained for scoped internal callers; a missing company fails closed.
+    protected function findAdminUser(?string $companyUuid = null): ?User
+    {
+        if (!$companyUuid) {
+            return null;
+        }
+
+        return User::query()
+            ->where('type', 'admin')
+            ->where('company_uuid', $companyUuid)
+            ->first();
     }
 
     protected function firstOrCreateNavigatorCredential(User $adminUser): ApiCredential
@@ -215,19 +250,4 @@ class NavigatorController extends Controller
         return Setting::where('key', 'fleet-ops.driver-onboard')->value('value');
     }
 
-    /**
-     * HMAC signature for a Navigator link expiring at the given unix timestamp.
-     */
-    public static function linkSignature(int $expires): string
-    {
-        return hash_hmac('sha256', 'fleet-ops.navigator.link-app|' . $expires, (string) config('app.key'));
-    }
-
-    protected function hasValidLinkSignature(Request $request): bool
-    {
-        $expires   = (int) $request->query('expires');
-        $signature = (string) $request->query('signature');
-
-        return $signature !== '' && $expires >= time() && hash_equals(static::linkSignature($expires), $signature);
-    }
 }
