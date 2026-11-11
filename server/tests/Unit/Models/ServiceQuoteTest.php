@@ -103,6 +103,15 @@ class FleetOpsServiceQuoteUnitQueryFake
     {
     }
 
+    public function where($column, $operator = null, $value = null, $boolean = 'and'): self
+    {
+        if ($column === 'company_uuid' && $this->quote?->company_uuid !== $operator) {
+            $this->quote = null;
+        }
+
+        return $this;
+    }
+
     public function first(): ?ServiceQuote
     {
         return $this->quote;
@@ -365,11 +374,13 @@ test('service quote converts lalamove quotations into quote items without persis
 });
 
 test('service quote resolves request references from uuid and public id', function () {
+    session(['company' => 'company-service-quote']);
     $uuidQuote = new ServiceQuote();
     $uuidQuote->setRawAttributes([
         'uuid'     => '11111111-1111-4111-8111-111111111111',
         'amount'   => 1500,
         'currency' => 'SGD',
+        'company_uuid' => 'company-service-quote',
     ], true);
 
     $idQuote = new ServiceQuote();
@@ -377,6 +388,7 @@ test('service quote resolves request references from uuid and public id', functi
         'uuid'     => '22222222-2222-4222-8222-222222222222',
         'amount'   => 2750,
         'currency' => 'USD',
+        'company_uuid' => 'company-service-quote',
     ], true);
 
     FleetOpsServiceQuoteUnitResolvableFake::$lookups = [];
@@ -398,6 +410,13 @@ test('service quote resolves request references from uuid and public id', functi
             ['uuid', '11111111-1111-4111-8111-111111111111'],
             ['public_id', 'quote_HIJKLMN'],
         ]);
+
+    session(['company' => 'different-company']);
+    expect(FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(fleetopsServiceQuoteUnitRequestWithQuote('11111111-1111-4111-8111-111111111111')))->toBeNull()
+        ->and(FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(fleetopsServiceQuoteUnitRequestWithQuote('quote_HIJKLMN')))->toBeNull();
+
+    session()->forget('company');
+    expect(FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(fleetopsServiceQuoteUnitRequestWithQuote('11111111-1111-4111-8111-111111111111')))->toBeNull();
 });
 
 test('service quote rejects unresolved request values and checkout without company', function () {

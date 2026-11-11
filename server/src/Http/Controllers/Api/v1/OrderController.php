@@ -146,8 +146,11 @@ class OrderController extends Controller
         // make sure company is set
         $input['company_uuid'] = $this->sessionCompany();
 
-        // resolve service quote if applicable
+        // Validate an explicitly supplied quote before creating payloads/orders.
         $serviceQuote          = $this->resolveServiceQuote($request);
+        if (ServiceQuote::hasReferenceInRequest($request) && !$serviceQuote) {
+            return response()->apiError('Invalid service quote for this company.', 422);
+        }
         $integratedVendorOrder = null;
 
         // if service quote is applied, resolve it
@@ -420,6 +423,11 @@ class OrderController extends Controller
                 ],
                 404
             );
+        }
+
+        // Reject invalid/foreign quote references before any order mutation.
+        if (ServiceQuote::hasReferenceInRequest($request) && !$this->resolveServiceQuote($request)) {
+            return response()->apiError('Invalid service quote for this company.', 422);
         }
 
         // get request input
