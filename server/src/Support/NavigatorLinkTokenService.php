@@ -21,7 +21,7 @@ class NavigatorLinkTokenService
 
     public function issue(User $issuer): string
     {
-        if ($issuer->type !== 'admin'
+        if ($issuer->type !== 'admin' || $issuer->status !== 'active'
             || !is_string($issuer->uuid) || $issuer->uuid === ''
             || !is_string($issuer->company_uuid) || $issuer->company_uuid === ''
             || !$issuer->company || $issuer->company->uuid !== $issuer->company_uuid) {
@@ -45,11 +45,17 @@ class NavigatorLinkTokenService
 
     public function redeem(string $token): ?User
     {
+        return $this->redeemWith($token, static fn (User $issuer): User => $issuer);
+    }
+
+    /** Issuance and consumption commit together. Failed issuance leaves the link retryable. */
+    public function redeemWith(string $token, \Closure $issue): mixed
+    {
         if (strlen($token) !== 64 || !ctype_xdigit($token) || strtolower($token) !== $token) {
             return null;
         }
 
-        return DB::transaction(function () use ($token): ?User {
+        return DB::transaction(function () use ($token, $issue) {
             $row = DB::table(self::TABLE)
                 ->where('token_hash', hash('sha256', $token))
                 ->lockForUpdate()
@@ -57,7 +63,7 @@ class NavigatorLinkTokenService
 
             if (!$row
                 || $row->consumed_at !== null
-                || \Illuminate\Support\Carbon::parse($row->expires_at)->isPast()) {
+                || \Illuminate\Support\Carbon::parse($row->expires_at)->lte(now())) {
                 return null;
             }
 
@@ -65,10 +71,17 @@ class NavigatorLinkTokenService
                 ->where('uuid', $row->issuer_user_uuid)
                 ->where('company_uuid', $row->company_uuid)
                 ->where('type', 'admin')
+                ->where('status', 'active')
+                ->lockForUpdate()
                 ->first();
 
             if (!$issuer || !$issuer->company || $issuer->company->uuid !== $row->company_uuid) {
                 return null;
+            }
+
+            $result = $issue($issuer);
+            if ($result === null) {
+                throw new \RuntimeException('Navigator issuance did not produce a result.');
             }
 
             // The row is locked during the check and the transition. With a
@@ -82,7 +95,11 @@ class NavigatorLinkTokenService
                     'updated_at' => now()->toDateTimeString(),
                 ]);
 
-            return $updated === 1 ? $issuer : null;
+            if ($updated !== 1) {
+                throw new \RuntimeException('Navigator token consumption failed.');
+            }
+
+            return $result;
         }, 3);
     }
 }

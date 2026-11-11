@@ -779,6 +779,9 @@ class OrderController extends Controller
         set_time_limit(180);
 
         $results = Order::queryWithRequest($request, function (&$query, $request) {
+            if ($driverUuid = $request->attributes->get('navigator_driver_uuid')) {
+                $query->where('driver_assigned_uuid', $driverUuid);
+            }
             $query->with(['trackingStatuses', 'driverAssigned', 'vehicleAssigned', 'customer', 'facilitator']);
             $query->where('company_uuid', session('company'));
             $query->whereNotNull('payload_uuid');
@@ -951,7 +954,7 @@ class OrderController extends Controller
                     }
                 }
             }
-        });
+        }, $request->attributes->has('navigator_driver_uuid'));
 
         return OrderResource::collection($results);
     }

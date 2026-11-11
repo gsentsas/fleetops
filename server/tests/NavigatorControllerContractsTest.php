@@ -27,6 +27,15 @@ use Fleetbase\Models\Company;
 use Fleetbase\Models\User;
 use Illuminate\Http\Request;
 
+// Laravel 12 types its global response() helper; use the package's isolated
+// response factory directly for these synthetic controller response contracts.
+if (!function_exists('Fleetbase\FleetOps\Http\Controllers\Internal\v1\response')) {
+    eval('namespace Fleetbase\\FleetOps\\Http\\Controllers\\Internal\\v1; function response() { return \\app(\\Illuminate\\Contracts\\Routing\\ResponseFactory::class); }');
+}
+if (!function_exists('Fleetbase\FleetOps\Http\Controllers\Internal\v1\url')) {
+    eval('namespace Fleetbase\\FleetOps\\Http\\Controllers\\Internal\\v1; function url($path = "") { return "http://localhost/" . ltrim($path, "/"); }');
+}
+
 class FleetOpsNavigatorTokenFake extends NavigatorLinkTokenService
 {
     public array $validTokens = [];
@@ -45,6 +54,12 @@ class FleetOpsNavigatorTokenFake extends NavigatorLinkTokenService
         unset($this->validTokens[$token]);
 
         return $issuer;
+    }
+
+    public function redeemWith(string $token, \Closure $issue): mixed
+    {
+        $issuer = $this->redeem($token);
+        return $issuer && $issuer->company ? $issue($issuer) : null;
     }
 }
 
@@ -76,6 +91,16 @@ class FleetOpsNavigatorControllerProbe extends NavigatorController
         return $this->apiCredential;
     }
 
+    // Response-contract double; real authorization runs in Fleet integration Rc1NavigatorMySqlTest.
+    protected function validNavigatorCredential(ApiCredential $credential): bool
+    {
+        return $credential->purpose === 'navigator'
+            && $credential->company_uuid === $this->adminUser?->company_uuid
+            && $credential->issuer_user_uuid === $this->adminUser?->uuid
+            && $credential->user_uuid === 'device-uuid'
+            && !$credential->trashed() && !$credential->hasExpired();
+    }
+
     protected function secureRootUrl(): string
     {
         return 'https://api.fleetbase.test';
@@ -105,7 +130,7 @@ class FleetOpsNavigatorControllerProbe extends NavigatorController
     {
         $this->redirects[] = $url;
 
-        return response()->json(['redirect' => $url]);
+        return new \Illuminate\Http\JsonResponse(['redirect' => $url]);
     }
 
     protected function findApiCredentialForToken(?string $token, string $connection, bool $isSecretKey): ?ApiCredential
@@ -135,6 +160,7 @@ function fleetopsNavigatorUser(?Company $company = null): User
         'uuid'         => 'user-uuid',
         'company_uuid' => $company?->uuid,
         'type'         => 'admin',
+        'status'       => 'active',
     ], true);
     $user->setRelation('company', $company);
 
@@ -156,9 +182,13 @@ function fleetopsNavigatorCompany(): Company
 function fleetopsNavigatorCredential(string $key = 'flb_live_key'): ApiCredential
 {
     $credential = new ApiCredential();
+    $credential->setDateFormat('Y-m-d H:i:s');
     $credential->setRawAttributes([
         'uuid'         => 'credential-uuid',
-        'user_uuid'    => 'user-uuid',
+        'user_uuid'    => 'device-uuid',
+        'issuer_user_uuid' => 'user-uuid',
+        'purpose'      => 'navigator',
+        'expires_at'   => now()->addDay()->toDateTimeString(),
         'key'          => $key,
         'secret'       => '$secret',
         'company_uuid' => 'company-uuid',
@@ -280,7 +310,7 @@ test('navigator controller returns missing organization error when no admin comp
 
     $response = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery()));
 
-    expect($response->getData(true))->toBe(['error' => 'Organization for linking not found.']);
+    expect($response->getStatusCode())->toBe(403);
 });
 
 test('navigator controller refuses unsigned, tampered and expired app links before touching credentials', function () {
@@ -306,6 +336,7 @@ test('navigator controller refuses unsigned, tampered and expired app links befo
 test('navigator controller exposes link url settings and current organization token lookup branches', function () {
     $controller                = new FleetOpsNavigatorControllerProbe();
     $controller->apiCredential = fleetopsNavigatorCredential('flb_test_key');
+    $controller->apiCredential->purpose = null;
     $controller->organization  = fleetopsNavigatorCompany();
     $controller->adminUser = fleetopsNavigatorUser($controller->organization);
     $controller->settings      = ['enabled' => true, 'invite_code_required' => false];

@@ -4,6 +4,8 @@ namespace Fleetbase\FleetOps\Http\Controllers\Internal\v1;
 
 use Fleetbase\FleetOps\Support\Utils;
 use Fleetbase\FleetOps\Support\NavigatorLinkTokenService;
+use Fleetbase\FleetOps\Support\NavigatorCredentialService;
+use Fleetbase\Support\NavigatorCredentialScope;
 use Fleetbase\FleetOps\Traits\AuthorizesMethods;
 use Fleetbase\Http\Controllers\Controller;
 use Fleetbase\Http\Resources\Organization;
@@ -13,6 +15,7 @@ use Fleetbase\Models\Setting;
 use Fleetbase\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Redirect;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class NavigatorController extends Controller
@@ -27,6 +30,8 @@ class NavigatorController extends Controller
     {
         $this->authorizeMethods([
             'getLinkAppUrl' => 'admin',
+            'revokePairing' => 'admin',
+            'rotatePairing' => 'admin',
         ]);
     }
 
@@ -47,25 +52,20 @@ class NavigatorController extends Controller
             return response()->error('This Navigator link is invalid or has expired. Generate a new one from the console.', 403);
         }
 
-        $adminUser = $this->navigatorLinkTokens()->redeem($token);
+        try {
+            $apiCredential = $this->navigatorLinkTokens()->redeemWith($token, function (User $issuer) {
+                return $this->firstOrCreateNavigatorCredential($issuer);
+            });
+        } catch (\Throwable $exception) {
+            // Never expose SQL, a key, or the raw provisioning token in an error.
+            return response()->error('Navigator pairing is temporarily unavailable. Retry or generate a new link.', 503);
+        }
 
-        if (!$adminUser) {
+        if (!$apiCredential) {
             return response()->error('This Navigator link is invalid or has expired. Generate a new one from the console.', 403);
         }
 
-        if (!$adminUser || !$adminUser->company) {
-            return response()->error('Organization for linking not found.');
-        }
-
-        $apiCredential = $this->firstOrCreateNavigatorCredential($adminUser);
-
-        // Never redirect with a credential from a different tenant/subject,
-        // even if an existing database row or a credential helper is corrupt.
-        if (!$apiCredential
-            || $apiCredential->company_uuid !== $adminUser->company_uuid
-            || $apiCredential->user_uuid !== $adminUser->uuid
-            || $apiCredential->trashed()
-            || $apiCredential->hasExpired()
+        if (!$this->validNavigatorCredential($apiCredential)
             || !is_string($apiCredential->key)
             || $apiCredential->key === '') {
             return response()->error('Navigator credential does not match its issuing organization.', 403);
@@ -86,7 +86,7 @@ class NavigatorController extends Controller
             'socketcluster_secure' => $socketSecure,
         ]);
 
-        $userAgent = $request->header('User-Agent');
+        $userAgent = $request->header('User-Agent', '');
         if (stripos($userAgent, 'android') !== false) {
             // Android: Use intent:// scheme
             $intentUrl = "intent://configure?$deepLinkParams#Intent;scheme=flbnavigator;package=" . $appIdentifier . ';end';
@@ -109,7 +109,7 @@ class NavigatorController extends Controller
     {
         $issuer = $this->navigatorLinkIssuer();
 
-        if (!$issuer || $issuer->type !== 'admin') {
+        if (!$issuer || $issuer->type !== 'admin' || $issuer->status !== 'active') {
             return response()->error('Navigator link issuer is not authorized.', 403);
         }
 
@@ -121,7 +121,42 @@ class NavigatorController extends Controller
 
         return response()->json([
             'linkUrl' => url('int/v1/fleet-ops/navigator/link-app') . '?' . http_build_query(['token' => $token]),
-        ]);
+        ])->header('Cache-Control', 'no-store')->header('Referrer-Policy', 'no-referrer');
+    }
+
+    public function revokePairing(string $uuid)
+    {
+        $actor = $this->navigatorLinkIssuer();
+        if (!$actor) {
+            return response()->error('Navigator pairing operation is not authorized.', 403);
+        }
+        try {
+            app(NavigatorCredentialService::class)->revoke($actor, $uuid);
+        } catch (\RuntimeException $exception) {
+            return response()->error('Navigator pairing operation is not authorized.', 403);
+        }
+
+        return response()->json(['revoked' => true])->header('Cache-Control', 'no-store');
+    }
+
+    public function rotatePairing(string $uuid)
+    {
+        $actor = $this->navigatorLinkIssuer();
+        if (!$actor) {
+            return response()->error('Navigator pairing operation is not authorized.', 403);
+        }
+        try {
+            $token = DB::transaction(function () use ($actor, $uuid) {
+                app(NavigatorCredentialService::class)->revoke($actor, $uuid);
+                return $this->navigatorLinkTokens()->issue($actor->fresh());
+            });
+        } catch (\RuntimeException $exception) {
+            return response()->error('Navigator pairing operation is not authorized.', 403);
+        }
+
+        return response()->json([
+            'linkUrl' => url('int/v1/fleet-ops/navigator/link-app') . '?' . http_build_query(['token' => $token]),
+        ])->header('Cache-Control', 'no-store')->header('Referrer-Policy', 'no-referrer');
     }
 
     /**
@@ -144,7 +179,8 @@ class NavigatorController extends Controller
         $apiCredential = $this->findApiCredentialForToken($token, $connection, $isSecretKey);
 
         // Handle no api credential found
-        if (!$apiCredential) {
+        if (!$apiCredential || $apiCredential->trashed() || $apiCredential->hasExpired()
+            || (NavigatorCredentialScope::isNavigator($apiCredential) && !NavigatorCredentialScope::valid($apiCredential))) {
             return response()->error('No API key found to fetch company details with.');
         }
 
@@ -178,6 +214,11 @@ class NavigatorController extends Controller
         return app(NavigatorLinkTokenService::class);
     }
 
+    protected function validNavigatorCredential(ApiCredential $credential): bool
+    {
+        return NavigatorCredentialScope::valid($credential);
+    }
+
     // Retained for scoped internal callers; a missing company fails closed.
     protected function findAdminUser(?string $companyUuid = null): ?User
     {
@@ -193,17 +234,7 @@ class NavigatorController extends Controller
 
     protected function firstOrCreateNavigatorCredential(User $adminUser): ApiCredential
     {
-        // Never reuse a shared, indefinite admin API key across mobile pairings.
-        // Each successful one-time link receives an independently revocable key.
-        // The 7-day limit is a temporary security ceiling pending a reviewed
-        // device renewal/scoped-identity protocol; it does NOT make an admin key
-        // least-privilege or cryptographically device-bound.
-        return ApiCredential::create([
-            'user_uuid'    => $adminUser->uuid,
-            'company_uuid' => $adminUser->company_uuid,
-            'name'         => 'NavigatorPairing-' . bin2hex(random_bytes(16)),
-            'expires_at'   => now()->addDays(7)->toDateTimeString(),
-        ]);
+        return app(NavigatorCredentialService::class)->issue($adminUser);
     }
 
     protected function secureRootUrl(): string
@@ -233,7 +264,7 @@ class NavigatorController extends Controller
 
     protected function redirectAway(string $url)
     {
-        return Redirect::away($url);
+        return Redirect::away($url)->header('Cache-Control', 'no-store')->header('Referrer-Policy', 'no-referrer');
     }
 
     protected function findApiCredentialForToken(?string $token, string $connection, bool $isSecretKey): ?ApiCredential

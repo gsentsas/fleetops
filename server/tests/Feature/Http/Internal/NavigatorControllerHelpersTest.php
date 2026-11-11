@@ -39,15 +39,19 @@ class FleetOpsNavigatorHelpersEnv
     public static array $values = [];
 }
 
+if (!function_exists('Fleetbase\FleetOps\Http\Controllers\Internal\v1\url')) {
+    eval('namespace Fleetbase\\FleetOps\\Http\\Controllers\\Internal\\v1; function url($path = null) { if ($path !== null) return "https://fleetbase.test/" . ltrim($path, "/"); return new class { public function secure($path = "/") { return "https://fleetbase.test" . $path; } }; }');
+}
+
 class FleetOpsNavigatorHelpersRedirectFake
 {
     public array $urls = [];
 
-    public function away(string $url): string
+    public function away(string $url): \Illuminate\Http\RedirectResponse
     {
         $this->urls[] = $url;
 
-        return 'redirected:' . $url;
+        return new \Illuminate\Http\RedirectResponse($url);
     }
 }
 
@@ -87,7 +91,7 @@ function fleetopsInternalNavigatorHelpersBoot(): SQLiteConnection
 
     $schema = $connection->getSchemaBuilder();
     $tables = [
-        'users'           => ['uuid', 'public_id', 'company_uuid', 'type', 'name', 'email', 'phone'],
+        'users'           => ['uuid', 'public_id', 'company_uuid', 'type', 'status', 'name', 'email', 'phone'],
         'companies'       => ['uuid', 'public_id', 'name', 'owner_uuid'],
         'api_credentials' => ['uuid', 'public_id', 'user_uuid', 'company_uuid', 'name', 'key', 'secret', 'expires_at', 'last_used_at'],
         'settings'        => ['key', 'value'],
@@ -96,7 +100,7 @@ function fleetopsInternalNavigatorHelpersBoot(): SQLiteConnection
         $schema->create($table, function ($blueprint) use ($columns) {
             $blueprint->increments('id');
             foreach ($columns as $column) {
-                $blueprint->string($column)->nullable();
+                $column === 'status' ? $blueprint->string($column)->default('active') : $blueprint->string($column)->nullable();
             }
             $blueprint->timestamps();
             $blueprint->timestamp('deleted_at')->nullable();
@@ -108,33 +112,29 @@ function fleetopsInternalNavigatorHelpersBoot(): SQLiteConnection
     return $connection;
 }
 
-test('admin lookup and navigator credential helpers execute against the database', function () {
+test('admin lookup remains tenant scoped and credential helper delegates to scoped service', function () {
     $connection = fleetopsInternalNavigatorHelpersBoot();
     $connection->table('companies')->insert(['uuid' => 'company-1', 'name' => 'Acme']);
     $connection->table('users')->insert(['uuid' => 'user-1', 'company_uuid' => 'company-1', 'type' => 'admin']);
-
     $probe = new FleetOpsInternalNavigatorHelpersProbe();
-
     $admin = $probe->callProtected('findAdminUser', ['company-1']);
-    expect($admin)->toBeInstanceOf(User::class)
-        ->and($admin->uuid)->toBe('user-1');
+    expect($admin)->toBeInstanceOf(User::class)->and($admin->uuid)->toBe('user-1');
 
+    // This isolated helper test verifies delegation. Real observer-generated
+    // keys, device identity, persistence and expiry run in Fleet's MySQL suite.
+    $service = new class extends \Fleetbase\FleetOps\Support\NavigatorCredentialService {
+        public array $issuers = [];
+        public function issue(User $issuer): ApiCredential
+        {
+            $this->issuers[] = $issuer->uuid;
+            return new ApiCredential(['company_uuid' => $issuer->company_uuid]);
+        }
+    };
+    app()->instance(\Fleetbase\FleetOps\Support\NavigatorCredentialService::class, $service);
     $credential = $probe->callProtected('firstOrCreateNavigatorCredential', [$admin]);
     expect($credential)->toBeInstanceOf(ApiCredential::class)
-        ->and($connection->table('api_credentials')->count())->toBe(1)
         ->and($credential->company_uuid)->toBe('company-1')
-        ->and($credential->user_uuid)->toBe('user-1')
-        ->and($credential->name)->toStartWith('NavigatorPairing-')
-        ->and($credential->expires_at)->not->toBeNull()
-        ->and($credential->expires_at->greaterThan(now()->addDays(6)))->toBeTrue()
-        ->and($credential->expires_at->lessThanOrEqualTo(now()->addDays(7)))->toBeTrue();
-
-    // New pairing must get a different, independently revocable credential.
-    $second = $probe->callProtected('firstOrCreateNavigatorCredential', [$admin]);
-    expect($connection->table('api_credentials')->count())->toBe(2)
-        ->and($second->name)->toStartWith('NavigatorPairing-')
-        ->and($second->name)->not->toBe($credential->name)
-        ->and($second->expires_at)->not->toBeNull();
+        ->and($service->issuers)->toBe(['user-1']);
 });
 
 /**
@@ -312,7 +312,7 @@ test('redirect away helper delegates to the redirector', function () {
 
     $result = (new FleetOpsInternalNavigatorHelpersProbe())->callProtected('redirectAway', ['flbnavigator://configure?key=abc']);
 
-    expect($result)->toBe('redirected:flbnavigator://configure?key=abc')
+    expect($result->getTargetUrl())->toBe('flbnavigator://configure?key=abc')
         ->and($redirect->urls)->toBe(['flbnavigator://configure?key=abc']);
 });
 

@@ -539,7 +539,9 @@ class DriverController extends Controller
                 $query->where('phone', static::phone($identity));
                 $query->orWhere('email', $identity);
             }
-        )->whereHas('driver')->first();
+        )->whereHas('driver')->when(request()->attributes->get('navigator_credential'), function ($query, $credential) {
+            $query->where('company_uuid', $credential->company_uuid);
+        })->first();
 
         // Check password to authenticate driver
         if (!$user || !is_string($user->password) || !Hash::check((string) $password, $user->password)) {
@@ -564,6 +566,7 @@ class DriverController extends Controller
         // generate auth token
         try {
             $token = $user->createToken($driver->uuid);
+            \Fleetbase\Support\NavigatorCredentialScope::bindDriverToken($token->accessToken);
         } catch (\Exception $e) {
             return response()->apiError($e->getMessage());
         }
@@ -593,7 +596,8 @@ class DriverController extends Controller
         }
 
         // check if user exists
-        $user = User::where('phone', $phone)->whereHas('driver')->whereNull('deleted_at')->first();
+        $user = User::where('phone', $phone)->whereHas('driver')->whereNull('deleted_at')
+            ->when(request()->attributes->get('navigator_credential'), fn ($query, $credential) => $query->where('company_uuid', $credential->company_uuid))->first();
         if (!$user) {
             return response()->apiError('No driver with this phone # found.');
         }
@@ -678,7 +682,7 @@ class DriverController extends Controller
         $user = User::whereHas('driver')->where(function ($query) use ($identity) {
             $query->where('phone', $identity);
             $query->orWhere('email', $identity);
-        })->first();
+        })->when(request()->attributes->get('navigator_credential'), fn ($query, $credential) => $query->where('company_uuid', $credential->company_uuid))->first();
 
         if (!$user) {
             return response()->apiError('Unable to verify code.');
@@ -722,6 +726,7 @@ class DriverController extends Controller
         // generate auth token
         try {
             $token = $user->createToken($driver->uuid);
+            \Fleetbase\Support\NavigatorCredentialScope::bindDriverToken($token->accessToken);
         } catch (\Exception $e) {
             return response()->apiError($e->getMessage());
         }
@@ -1383,6 +1388,7 @@ class DriverController extends Controller
          */
         $user->tokens()->delete();
         $token = $user->createToken($request->input('device_name', 'navigator'));
+        \Fleetbase\Support\NavigatorCredentialScope::bindDriverToken($token->accessToken);
 
         return response()->json([
             'status' => 'ok',
