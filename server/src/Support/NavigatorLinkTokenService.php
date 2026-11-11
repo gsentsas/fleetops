@@ -10,11 +10,12 @@ use Illuminate\Support\Facades\DB;
 /**
  * S86 foundation: atomic single-use Navigator provisioning links.
  *
- * The legacy Navigator controller is NOT wired to this service yet. Do not
- * enable the public endpoint before explicit contract and integration tests.
+ * The public Navigator controller redeems tokens through this service.
+ * Production enablement remains blocked pending disposable multi-tenant
+ * runtime tests, migration replay and exact-pinned release CI.
  * Only token hashes are stored; raw tokens must never be logged.
  */
-final class NavigatorLinkTokenService
+class NavigatorLinkTokenService
 {
     private const TABLE = 'fleetops_navigator_link_tokens';
 
