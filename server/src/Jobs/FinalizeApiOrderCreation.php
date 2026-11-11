@@ -70,7 +70,7 @@ class FinalizeApiOrderCreation implements ShouldQueue
 
     protected function requireCompanyUuid(): string
     {
-        if (!is_string($this->companyUuid) || $this->companyUuid === '') {
+        if (!isset($this->companyUuid) || !is_string($this->companyUuid) || $this->companyUuid === '') {
             throw new \RuntimeException('Queued order finalization is missing its tenant.');
         }
 
