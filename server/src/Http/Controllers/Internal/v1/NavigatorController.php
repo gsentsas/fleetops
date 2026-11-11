@@ -59,6 +59,16 @@ class NavigatorController extends Controller
 
         $apiCredential = $this->firstOrCreateNavigatorCredential($adminUser);
 
+        // Never redirect with a credential from a different tenant/subject,
+        // even if an existing database row or a credential helper is corrupt.
+        if (!$apiCredential
+            || $apiCredential->company_uuid !== $adminUser->company_uuid
+            || $apiCredential->user_uuid !== $adminUser->uuid
+            || !is_string($apiCredential->key)
+            || $apiCredential->key === '') {
+            return response()->error('Navigator credential does not match its issuing organization.', 403);
+        }
+
         $key           = $apiCredential->key;
         $host          = $this->secureRootUrl();
         $socketHost    = $this->socketClusterHost();
