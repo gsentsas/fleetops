@@ -228,6 +228,34 @@ test('navigator controller blocks cross-tenant and wrong-subject credentials', f
         ->and($controller->redirects)->toBe([]);
 });
 
+test('navigator controller refuses expired or revoked credentials before mobile redirect', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->tokens = new FleetOpsNavigatorTokenFake();
+
+    $expired = fleetopsNavigatorCredential('flb_live_expired');
+    $expired->expires_at = now()->subMinute();
+    $controller->apiCredential = $expired;
+    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
+
+    $deniedExpired = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery()));
+
+    expect($deniedExpired->getStatusCode())->toBe(403)
+        ->and($controller->redirects)->toBe([]);
+
+    $revoked = fleetopsNavigatorCredential('flb_live_revoked');
+    $revoked->setRawAttributes(array_merge($revoked->getAttributes(), [
+        'deleted_at' => now()->subMinute()->toDateTimeString(),
+    ]), true);
+    $controller->apiCredential = $revoked;
+    $controller->tokens->validTokens[str_repeat('b', 64)] = $controller->adminUser;
+
+    $deniedRevoked = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery('b')));
+
+    expect($deniedRevoked->getStatusCode())->toBe(403)
+        ->and($controller->redirects)->toBe([]);
+});
+
 test('navigator controller refuses replay of a previously redeemed link', function () {
     $controller = new FleetOpsNavigatorControllerProbe();
     $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
