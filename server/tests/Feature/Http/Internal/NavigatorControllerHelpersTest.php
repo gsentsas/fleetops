@@ -125,7 +125,9 @@ test('admin lookup and navigator credential helpers execute against the database
         ->and($credential->company_uuid)->toBe('company-1')
         ->and($credential->user_uuid)->toBe('user-1')
         ->and($credential->name)->toStartWith('NavigatorPairing-')
-        ->and($credential->expires_at)->not->toBeNull();
+        ->and($credential->expires_at)->not->toBeNull()
+        ->and($credential->expires_at->greaterThan(now()->addDays(6)))->toBeTrue()
+        ->and($credential->expires_at->lessThanOrEqualTo(now()->addDays(7)))->toBeTrue();
 
     // New pairing must get a different, independently revocable credential.
     $second = $probe->callProtected('firstOrCreateNavigatorCredential', [$admin]);
