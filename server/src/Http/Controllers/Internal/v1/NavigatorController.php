@@ -5,6 +5,7 @@ namespace Fleetbase\FleetOps\Http\Controllers\Internal\v1;
 use Fleetbase\FleetOps\Support\Utils;
 use Fleetbase\FleetOps\Support\NavigatorLinkTokenService;
 use Fleetbase\FleetOps\Support\NavigatorCredentialService;
+use Fleetbase\FleetOps\Support\NavigatorPairingV2Service;
 use Fleetbase\Support\NavigatorCredentialScope;
 use Fleetbase\FleetOps\Traits\AuthorizesMethods;
 use Fleetbase\Http\Controllers\Controller;
@@ -24,104 +25,229 @@ class NavigatorController extends Controller
     /**
      * How long a Navigator link issued from the console stays valid.
      */
-    public const LINK_TTL_MINUTES = 30;
+    public const LINK_TTL_MINUTES = 5;
 
     public function __construct()
     {
         $this->authorizeMethods([
             'getLinkAppUrl' => 'admin',
+            'issuePairing' => 'admin',
+            'approvePairing' => 'admin',
+            'pendingPairings' => 'admin',
             'revokePairing' => 'admin',
             'rotatePairing' => 'admin',
         ]);
     }
 
     /**
-     * Redirects to the Fleetbase Navigator app using a deep link.
-     * Automatically detects the platform (iOS or Android) and uses the correct URI scheme.
-     *
-     * @return \Illuminate\Http\RedirectResponse|\Illuminate\Http\JsonResponse
+     * V2 cutover: legacy query-bearing Navigator links are never redeemed.
+     * This endpoint is deliberately left fail-closed for existing bookmarks.
      */
     public function linkApp(Request $request)
     {
-        // The public redemption endpoint only accepts an opaque, single-use
-        // capability bound to the authenticated issuing company's admin.
-        // Legacy expires+signature links intentionally fail closed.
-        $token = $request->query('token');
-
-        if (!is_string($token)) {
-            return response()->error('This Navigator link is invalid or has expired. Generate a new one from the console.', 403);
-        }
-
-        try {
-            $apiCredential = $this->navigatorLinkTokens()->redeemWith($token, function (User $issuer) {
-                return $this->firstOrCreateNavigatorCredential($issuer);
-            });
-        } catch (\Throwable $exception) {
-            // Never expose SQL, a key, or the raw provisioning token in an error.
-            return response()->error('Navigator pairing is temporarily unavailable. Retry or generate a new link.', 503);
-        }
-
-        if (!$apiCredential) {
-            return response()->error('This Navigator link is invalid or has expired. Generate a new one from the console.', 403);
-        }
-
-        if (!$this->validNavigatorCredential($apiCredential)
-            || !is_string($apiCredential->key)
-            || $apiCredential->key === '') {
-            return response()->error('Navigator credential does not match its issuing organization.', 403);
-        }
-
-        $key           = $apiCredential->key;
-        $host          = $this->secureRootUrl();
-        $socketHost    = $this->socketClusterHost();
-        $socketPort    = $this->socketClusterPort();
-        $socketSecure  = $this->socketClusterSecure();
-        $appIdentifier = $this->navigatorAppIdentifier();
-
-        $deepLinkParams = http_build_query([
-            'key'                  => $key,
-            'host'                 => $host,
-            'socketcluster_host'   => $socketHost,
-            'socketcluster_port'   => $socketPort,
-            'socketcluster_secure' => $socketSecure,
-        ]);
-
-        $userAgent = $request->header('User-Agent', '');
-        if (stripos($userAgent, 'android') !== false) {
-            // Android: Use intent:// scheme
-            $intentUrl = "intent://configure?$deepLinkParams#Intent;scheme=flbnavigator;package=" . $appIdentifier . ';end';
-
-            return $this->redirectAway($intentUrl);
-        }
-
-        // Default to iOS (or fallback): Use flbnavigator://
-        $iosUrl = "flbnavigator://configure?$deepLinkParams";
-
-        return $this->redirectAway($iosUrl);
+        return response()->error('Navigator pairing requires a recent app. Please update Navigator.', 403)
+            ->header('Cache-Control', 'no-store')
+            ->header('Referrer-Policy', 'no-referrer');
     }
 
     /**
-     * Returns the URL used to link the Fleetbase Navigator app.
+     * Issues a one-time pairing secret to the authorized company admin.
      *
-     * @return \Illuminate\Http\JsonResponse
+     * Navigator must scan the QR into the app and send the secret in a POST
+     * JSON body; never navigate a browser to a URL carrying the secret.
      */
-    public function getLinkAppUrl()
+    public function issuePairing(Request $request)
     {
+        // Inactive until the mobile device-binding and full QA gates pass.
+        if (!$this->navigatorV2Enabled()) {
+            return response()->error('Navigator pairing V2 is not enabled.', 403);
+        }
+
         $issuer = $this->navigatorLinkIssuer();
 
         if (!$issuer || $issuer->type !== 'admin' || $issuer->status !== 'active') {
-            return response()->error('Navigator link issuer is not authorized.', 403);
+            return response()->error('Navigator pairing operation is not authorized.', 403);
         }
 
         try {
-            $token = $this->navigatorLinkTokens()->issue($issuer);
+            $secret = $this->navigatorLinkTokens()->issue($issuer);
         } catch (\RuntimeException $exception) {
-            return response()->error('Navigator link issuer is not authorized.', 403);
+            return response()->error('Navigator pairing operation is not authorized.', 403);
         }
 
         return response()->json([
-            'linkUrl' => url('int/v1/fleet-ops/navigator/link-app') . '?' . http_build_query(['token' => $token]),
+            'pairingSecret' => $secret,
+            'expiresInSeconds' => self::LINK_TTL_MINUTES * 60,
+        ])->header('Cache-Control', 'no-store')
+          ->header('Referrer-Policy', 'no-referrer');
+    }
+
+    /**
+     * A QR bearer can create only a PENDING pairing, never an API credential.
+     * The device must prove its private key and an admin must approve first.
+     */
+    public function redeemPairing(Request $request)
+    {
+        if (!$this->navigatorV2Enabled()) {
+            return response()->error('Navigator pairing V2 is not enabled.', 403);
+        }
+        if ($request->query() !== [] || !$request->isJson()) {
+            return response()->error('Navigator pairing request is invalid.', 403);
+        }
+        $secret = $request->json('pairingSecret');
+        $publicKey = $request->json('publicKeyPem');
+        if (!is_string($secret) || strlen($secret) !== 64 || !ctype_xdigit($secret)
+            || strtolower($secret) !== $secret || !is_string($publicKey)
+            || NavigatorPairingV2Service::validatedPublicKey($publicKey) === null) {
+            return response()->error('Navigator pairing request is invalid.', 403);
+        }
+
+        try {
+            $pending = $this->navigatorLinkTokens()->redeemWith(
+                $secret,
+                fn (User $issuer) => $this->navigatorPairingV2()->begin($issuer, $publicKey)
+            );
+        } catch (\Throwable $exception) {
+            return response()->error('Navigator pairing temporarily unavailable.', 503);
+        }
+        if (!is_array($pending) || !isset($pending['pairingSessionId'])) {
+            return response()->error('Navigator pairing request is invalid or expired.', 403);
+        }
+        return response()->json($pending)->header('Cache-Control', 'no-store')
+            ->header('Referrer-Policy', 'no-referrer');
+    }
+
+    public function provePairing(Request $request)
+    {
+        if (!$this->navigatorV2Enabled() || $request->query() !== [] || !$request->isJson()) {
+            return response()->error('Navigator pairing is not available.', 403);
+        }
+        $session = $request->json('pairingSessionId');
+        $signature = $request->json('signature');
+        if (!is_string($session) || !preg_match('/^[a-f0-9]{64}$/D', $session)
+            || !is_string($signature)) {
+            return response()->error('Invalid Navigator proof.', 403);
+        }
+        try {
+            $valid = $this->navigatorPairingV2()->prove($session, $signature);
+        } catch (\Throwable $exception) {
+            return response()->error('Navigator pairing temporarily unavailable.', 503);
+        }
+        if (!$valid) {
+            return response()->error('Invalid or expired Navigator proof.', 403);
+        }
+        return response()->json(['verified' => true])->header('Cache-Control', 'no-store');
+    }
+
+    /**
+     * Protected POST: discover only verified, unapproved pairing sessions
+     * created by this exact issuer. No transfer QR or credentials returned.
+     */
+    public function pendingPairings(Request $request)
+    {
+        if (!$this->navigatorV2Enabled() || $request->query() !== [] || !$request->isJson()) {
+            return response()->error('Navigator pairing is not available.', 403);
+        }
+        $actor = $this->navigatorLinkIssuer();
+        if (!$actor || $actor->type !== 'admin' || $actor->status !== 'active') {
+            return response()->error('Navigator pairing operation is not authorized.', 403);
+        }
+        try {
+            $sessions = $this->navigatorPairingV2()->pendingForIssuer($actor);
+        } catch (\Throwable $exception) {
+            return response()->error('Navigator pairing temporarily unavailable.', 503);
+        }
+
+        return response()->json(['pendingPairings' => $sessions])
+            ->header('Cache-Control', 'no-store')
+            ->header('Referrer-Policy', 'no-referrer');
+    }
+
+    public function approvePairing(Request $request)
+    {
+        if (!$this->navigatorV2Enabled() || $request->query() !== [] || !$request->isJson()) {
+            return response()->error('Navigator pairing is not available.', 403);
+        }
+        $session = $request->json('pairingSessionId');
+        $confirmation = $request->json('deviceConfirmationCode');
+        $actor = $this->navigatorLinkIssuer();
+        if (!is_string($session) || !preg_match('/^[a-f0-9]{64}$/D', $session)
+            || !is_string($confirmation) || !preg_match('/^[a-f0-9]{12}$/D', $confirmation)
+            || !$actor || $actor->type !== 'admin' || $actor->status !== 'active') {
+            return response()->error('Navigator approval not authorized.', 403);
+        }
+        try {
+            $approved = $this->navigatorPairingV2()->approve($actor, $session, $confirmation);
+        } catch (\Throwable $exception) {
+            return response()->error('Navigator pairing temporarily unavailable.', 503);
+        }
+        if (!$approved) {
+            return response()->error('Navigator approval not authorized.', 403);
+        }
+        return response()->json(['approved' => true])->header('Cache-Control', 'no-store');
+    }
+
+    public function pairingStatus(Request $request)
+    {
+        if (!$this->navigatorV2Enabled() || $request->query() !== [] || !$request->isJson()) {
+            return response()->error('Navigator pairing is not available.', 403);
+        }
+        $session = $request->json('pairingSessionId');
+        if (!is_string($session) || !preg_match('/^[a-f0-9]{64}$/D', $session)) {
+            return response()->error('Navigator pairing request invalid.', 403);
+        }
+        try {
+            $status = $this->navigatorPairingV2()->status($session);
+        } catch (\Throwable $exception) {
+            return response()->error('Navigator pairing temporarily unavailable.', 503);
+        }
+        if ($status === null) {
+            return response()->error('Navigator pairing expired.', 403);
+        }
+        return response()->json($status)->header('Cache-Control', 'no-store');
+    }
+
+    /**
+     * Final credential is available only after an authorized admin approval
+     * and a SECOND cryptographic challenge signed by the same device key.
+     */
+    public function claimPairing(Request $request)
+    {
+        if (!$this->navigatorV2Enabled() || $request->query() !== [] || !$request->isJson()) {
+            return response()->error('Navigator pairing is not available.', 403);
+        }
+        $session = $request->json('pairingSessionId');
+        $signature = $request->json('signature');
+        if (!is_string($session) || !preg_match('/^[a-f0-9]{64}$/D', $session)
+            || !is_string($signature)) {
+            return response()->error('Navigator pairing request invalid.', 403);
+        }
+        try {
+            $credential = $this->navigatorPairingV2()->claim($session, $signature);
+        } catch (\Throwable $exception) {
+            return response()->error('Navigator pairing temporarily unavailable.', 503);
+        }
+        if (!$credential instanceof ApiCredential) {
+            return response()->error('Navigator pairing is not yet authorized.', 403);
+        }
+        return response()->json([
+            'credential' => $credential->key,
+            'host' => $this->secureRootUrl(),
+            'socketcluster_host' => $this->socketClusterHost(),
+            'socketcluster_port' => $this->socketClusterPort(),
+            'socketcluster_secure' => $this->socketClusterSecure(),
         ])->header('Cache-Control', 'no-store')->header('Referrer-Policy', 'no-referrer');
+    }
+
+    /**
+     * Legacy issuance GET is intentionally disabled: it would return an
+     * unprotected bearer link in an HTTP URL, compromising error logs.
+     */
+    public function getLinkAppUrl()
+    {
+        return response()->error('Navigator pairing requires the V2 client.', 403)
+            ->header('Cache-Control', 'no-store')
+            ->header('Referrer-Policy', 'no-referrer');
     }
 
     public function revokePairing(string $uuid)
@@ -141,6 +267,11 @@ class NavigatorController extends Controller
 
     public function rotatePairing(string $uuid)
     {
+        // Inactive until the mobile device-binding and full QA gates pass.
+        if (!$this->navigatorV2Enabled()) {
+            return response()->error('Navigator pairing V2 is not enabled.', 403);
+        }
+
         $actor = $this->navigatorLinkIssuer();
         if (!$actor) {
             return response()->error('Navigator pairing operation is not authorized.', 403);
@@ -155,7 +286,8 @@ class NavigatorController extends Controller
         }
 
         return response()->json([
-            'linkUrl' => url('int/v1/fleet-ops/navigator/link-app') . '?' . http_build_query(['token' => $token]),
+            'pairingSecret' => $token,
+            'expiresInSeconds' => self::LINK_TTL_MINUTES * 60,
         ])->header('Cache-Control', 'no-store')->header('Referrer-Policy', 'no-referrer');
     }
 
@@ -200,6 +332,17 @@ class NavigatorController extends Controller
         $onBoardSettings = $this->driverOnboardSettings();
 
         return response()->json($onBoardSettings);
+    }
+
+    protected function navigatorPairingV2(): NavigatorPairingV2Service
+    {
+        return app(NavigatorPairingV2Service::class);
+    }
+
+    protected function navigatorV2Enabled(): bool
+    {
+        // Fail closed even if routes are registered by a candidate build.
+        return config('fleetops.navigator.pairing_v2_enabled', false) === true;
     }
 
     protected function navigatorLinkIssuer(): ?User

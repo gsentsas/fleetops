@@ -34,7 +34,7 @@ class NavigatorLinkTokenService
             'token_hash'       => hash('sha256', $token),
             'company_uuid'     => $issuer->company_uuid,
             'issuer_user_uuid' => $issuer->uuid,
-            'expires_at'      => now()->addMinutes(30)->toDateTimeString(),
+            'expires_at'      => now()->addMinutes(5)->toDateTimeString(),
             'consumed_at'     => null,
             'created_at'      => now()->toDateTimeString(),
             'updated_at'      => now()->toDateTimeString(),

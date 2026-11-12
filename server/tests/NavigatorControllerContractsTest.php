@@ -63,6 +63,68 @@ class FleetOpsNavigatorTokenFake extends NavigatorLinkTokenService
     }
 }
 
+class FleetOpsNavigatorPairingV2Fake extends \Fleetbase\FleetOps\Support\NavigatorPairingV2Service
+{
+    public bool $proofValid = false;
+    public bool $approved = false;
+    public ?ApiCredential $issuedCredential = null;
+
+    public function begin(User $issuer, string $pem): array
+    {
+        return [
+            'pairingSessionId' => str_repeat('c', 64),
+            'companyUuid' => $issuer->company_uuid,
+            'publicKeyFingerprint' => hash('sha256', $pem),
+            'challenge' => str_repeat('d', 64),
+            'challengeExpiresUnix' => time() + 120,
+            'expiresUnix' => time() + 300,
+        ];
+    }
+
+    public function prove(string $sessionId, string $signatureBase64): bool
+    {
+        return $this->proofValid = $sessionId === str_repeat('c', 64) && $signatureBase64 === 'synthetic-valid';
+    }
+
+    public function approve(User $actor, string $sessionId, string $deviceConfirmationCode): bool
+    {
+        return $this->approved = $this->proofValid && $deviceConfirmationCode === str_repeat('a', 12)
+            && $actor->type === 'admin' && $actor->company_uuid === 'company-uuid'
+            && $sessionId === str_repeat('c', 64);
+    }
+
+    public function pendingForIssuer(User $actor): array
+    {
+        return $actor->type === 'admin' && $actor->company_uuid === 'company-uuid' && $this->proofValid
+            && !$this->approved
+            ? [[
+                'pairingSessionId' => str_repeat('c', 64),
+                'publicKeyFingerprint' => str_repeat('a', 64),
+                'deviceConfirmationCode' => str_repeat('a', 12),
+                'expiresUnix' => time() + 120,
+                'verified' => true,
+            ]]
+            : [];
+    }
+
+    public function status(string $sessionId): ?array
+    {
+        return $sessionId === str_repeat('c', 64)
+            ? ['verified' => $this->proofValid, 'approved' => $this->approved,
+                'claimChallenge' => $this->approved ? str_repeat('e', 64) : null,
+                'claimExpiresUnix' => $this->approved ? time() + 120 : null]
+            : null;
+    }
+
+    public function claim(string $sessionId, string $signatureBase64): ?ApiCredential
+    {
+        return $this->proofValid && $this->approved && $sessionId === str_repeat('c', 64)
+            && $signatureBase64 === 'synthetic-final'
+            ? $this->issuedCredential
+            : null;
+    }
+}
+
 class FleetOpsNavigatorControllerProbe extends NavigatorController
 {
     public ?User $adminUser              = null;
@@ -73,6 +135,20 @@ class FleetOpsNavigatorControllerProbe extends NavigatorController
     public array $credentialLookups      = [];
     public array $organizationLookups    = [];
     public FleetOpsNavigatorTokenFake $tokens;
+    public FleetOpsNavigatorPairingV2Fake $pairing;
+
+    protected function navigatorPairingV2(): \Fleetbase\FleetOps\Support\NavigatorPairingV2Service
+    {
+        return $this->pairing ??= new FleetOpsNavigatorPairingV2Fake();
+    }
+
+
+    public bool $v2Enabled = true;
+
+    protected function navigatorV2Enabled(): bool
+    {
+        return $this->v2Enabled;
+    }
 
     protected function navigatorLinkIssuer(): ?User
     {
@@ -202,170 +278,213 @@ function fleetopsNavigatorTokenQuery(string $value = 'a'): array
     return ['token' => str_repeat($value, 64)];
 }
 
-test('navigator controller builds android and ios app link redirects', function () {
-    $company                   = fleetopsNavigatorCompany();
-    $controller                = new FleetOpsNavigatorControllerProbe();
-    $controller->adminUser     = fleetopsNavigatorUser($company);
-    $controller->apiCredential = fleetopsNavigatorCredential('flb_live_navigator');
-    $controller->tokens = new FleetOpsNavigatorTokenFake();
-    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
-    $controller->tokens->validTokens[str_repeat('b', 64)] = $controller->adminUser;
 
-    $android = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery(), [], [], [
-        'HTTP_USER_AGENT' => 'Mozilla/5.0 Android',
-    ]))->getData(true);
+function fleetopsNavigatorV2PublicKey(): string
+{
+    static $pem;
+    if (!$pem) {
+        $key = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1']);
+        $pem = openssl_pkey_get_details($key)['key'];
+    }
+    return $pem;
+}
 
-    $ios = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery('b'), [], [], [
-        'HTTP_USER_AGENT' => 'Mozilla/5.0 iPhone',
-    ]))->getData(true);
+function fleetopsNavigatorV2Post(string $route, array $body, array $query = []): Request
+{
+    return Request::create(
+        $route . ($query ? '?' . http_build_query($query) : ''),
+        'POST', [], [], [], ['CONTENT_TYPE' => 'application/json'],
+        json_encode($body, JSON_THROW_ON_ERROR)
+    );
+}
 
-    expect($android['redirect'])->toStartWith('intent://configure?')
-        ->and($android['redirect'])->toContain('key=flb_live_navigator')
-        ->and($android['redirect'])->toContain('host=https%3A%2F%2Fapi.fleetbase.test')
-        ->and($android['redirect'])->toContain('package=io.fleetbase.navigator.test;end')
-        ->and($ios['redirect'])->toStartWith('flbnavigator://configure?')
-        ->and($ios['redirect'])->toContain('socketcluster_host=socket.test')
-        ->and($ios['redirect'])->toContain('socketcluster_port=7001')
-        ->and($ios['redirect'])->toContain('socketcluster_secure=1')
-        ->and($controller->credentialLookups)->toBe([
-            ['navigator', 'user-uuid', 'company-uuid'],
-            ['navigator', 'user-uuid', 'company-uuid'],
-        ]);
-});
+function fleetopsNavigatorV2JsonRequest(string $token, array $query = []): Request
+{
+    return fleetopsNavigatorV2Post('/navigator/pairings/redeem',
+        ['pairingSecret' => $token, 'publicKeyPem' => fleetopsNavigatorV2PublicKey()], $query);
+}
 
-test('navigator controller blocks cross-tenant and wrong-subject credentials', function () {
+test('navigator v2 is disabled by default until explicit enablement', function () {
     $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->v2Enabled = false;
     $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
-    $controller->tokens = new FleetOpsNavigatorTokenFake();
-    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
 
-    $credential = fleetopsNavigatorCredential('flb_live_wrong_company');
-    $credential->company_uuid = 'other-company';
-    $controller->apiCredential = $credential;
-
-    $denied = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery()));
-
-    expect($denied->getStatusCode())->toBe(403)
-        ->and($controller->redirects)->toBe([]);
-
-    $controller->tokens->validTokens[str_repeat('b', 64)] = $controller->adminUser;
-    $credential->company_uuid = 'company-uuid';
-    $credential->user_uuid = 'other-user';
-
-    $deniedSubject = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery('b')));
-
-    expect($deniedSubject->getStatusCode())->toBe(403)
-        ->and($controller->redirects)->toBe([]);
+    expect($controller->issuePairing(Request::create('/navigator/pairings', 'POST'))->getStatusCode())->toBe(403)
+        ->and($controller->redeemPairing(fleetopsNavigatorV2JsonRequest(str_repeat('a', 64)))->getStatusCode())->toBe(403)
+        ->and($controller->claimPairing(fleetopsNavigatorV2Post('/navigator/pairings/claim', []))->getStatusCode())->toBe(403);
 });
 
-test('navigator controller refuses expired or revoked credentials before mobile redirect', function () {
-    $controller = new FleetOpsNavigatorControllerProbe();
-    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
-    $controller->tokens = new FleetOpsNavigatorTokenFake();
-
-    $expired = fleetopsNavigatorCredential('flb_live_expired');
-    $expired->expires_at = now()->subMinute();
-    $controller->apiCredential = $expired;
-    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
-
-    $deniedExpired = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery()));
-
-    expect($deniedExpired->getStatusCode())->toBe(403)
-        ->and($controller->redirects)->toBe([]);
-
-    $revoked = fleetopsNavigatorCredential('flb_live_revoked');
-    $revoked->setRawAttributes(array_merge($revoked->getAttributes(), [
-        'deleted_at' => now()->subMinute()->toDateTimeString(),
-    ]), true);
-    $controller->apiCredential = $revoked;
-    $controller->tokens->validTokens[str_repeat('b', 64)] = $controller->adminUser;
-
-    $deniedRevoked = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery('b')));
-
-    expect($deniedRevoked->getStatusCode())->toBe(403)
-        ->and($controller->redirects)->toBe([]);
-});
-
-test('navigator controller refuses replay of a previously redeemed link', function () {
+test('navigator v2 refuses legacy GET pairing and old issuance without credentials', function () {
     $controller = new FleetOpsNavigatorControllerProbe();
     $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
     $controller->apiCredential = fleetopsNavigatorCredential();
-    $controller->tokens = new FleetOpsNavigatorTokenFake();
-    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
 
-    $request = Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery());
-    $accepted = $controller->linkApp($request);
-    $replayed = $controller->linkApp($request);
+    $response = $controller->linkApp(Request::create('/navigator/link-app?token=' . str_repeat('a', 64)));
+    $issueOld = $controller->getLinkAppUrl();
 
-    expect($accepted->getData(true)['redirect'])->toStartWith('flbnavigator://')
-        ->and($replayed->getStatusCode())->toBe(403)
-        ->and($controller->credentialLookups)->toHaveCount(1);
+    expect($response->getStatusCode())->toBe(403)
+        ->and($issueOld->getStatusCode())->toBe(403)
+        ->and($controller->redirects)->toBe([])
+        ->and($controller->credentialLookups)->toBe([])
+        ->and($response->headers->get('Cache-Control'))->toContain('no-store');
 });
 
-test('navigator controller returns missing organization error when no admin company is available', function () {
-    $controller            = new FleetOpsNavigatorControllerProbe();
-    $controller->adminUser = fleetopsNavigatorUser(null);
+test('navigator v2 issues only via authorized POST and never returns a bearer URL', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
     $controller->tokens = new FleetOpsNavigatorTokenFake();
-    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
 
-    $response = $controller->linkApp(Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery()));
+    $result = $controller->issuePairing(Request::create('/navigator/pairings', 'POST'));
+    $body = $result->getData(true);
 
+    expect($result->getStatusCode())->toBe(200)
+        ->and($body['pairingSecret'])->toHaveLength(64)
+        ->and($body['expiresInSeconds'])->toBe(300)
+        ->and(array_key_exists('linkUrl', $body))->toBeFalse()
+        ->and($controller->tokens->issuedTo)->toBe([['user-uuid', 'company-uuid']])
+        ->and($result->headers->get('Cache-Control'))->toContain('no-store');
+});
+
+test('navigator v2 rejects unauthenticated issuance', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = null;
+    $response = $controller->issuePairing(Request::create('/navigator/pairings', 'POST'));
     expect($response->getStatusCode())->toBe(403);
 });
 
-test('navigator controller refuses unsigned, tampered and expired app links before touching credentials', function () {
-    $company                   = fleetopsNavigatorCompany();
-    $controller                = new FleetOpsNavigatorControllerProbe();
-    $controller->adminUser     = fleetopsNavigatorUser($company);
-    $controller->apiCredential = fleetopsNavigatorCredential('flb_live_navigator');
+test('navigator v2 QR redeem creates only pending session without credential or Location', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->apiCredential = fleetopsNavigatorCredential('flb_test_device_scoped');
+    $controller->tokens = new FleetOpsNavigatorTokenFake();
+    $controller->tokens->validTokens[str_repeat('a', 64)] = $controller->adminUser;
+
+    $result = $controller->redeemPairing(fleetopsNavigatorV2JsonRequest(str_repeat('a', 64)));
+    $body = $result->getData(true);
+
+    expect($result->getStatusCode())->toBe(200)
+        ->and($body['pairingSessionId'])->toHaveLength(64)
+        ->and(array_key_exists('credential', $body))->toBeFalse()
+        ->and($result->headers->get('Location'))->toBeNull()
+        ->and($result->headers->get('Cache-Control'))->toContain('no-store')
+        ->and($controller->redirects)->toBe([])
+        ->and($controller->credentialLookups)->toBe([]);
+
+    $replay = $controller->redeemPairing(fleetopsNavigatorV2JsonRequest(str_repeat('a', 64)));
+    expect($replay->getStatusCode())->toBe(403);
+});
+
+test('navigator v2 rejects query, non-json, malformed QR and wrong public key', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->tokens = new FleetOpsNavigatorTokenFake();
 
     $requests = [
-        'unsigned' => Request::create('/navigator/link-app', 'GET'),
-        'tampered' => Request::create('/navigator/link-app', 'GET', fleetopsNavigatorTokenQuery('f')),
-        'legacy'   => Request::create('/navigator/link-app', 'GET', ['expires' => time() + 600, 'signature' => str_repeat('f', 64)]),
+        fleetopsNavigatorV2JsonRequest(str_repeat('a', 64), ['token' => 'bad']),
+        fleetopsNavigatorV2JsonRequest('invalid'),
+        Request::create('/navigator/pairings/redeem', 'POST', ['pairingSecret' => str_repeat('a', 64)]),
+        fleetopsNavigatorV2Post('/navigator/pairings/redeem', []),
+        fleetopsNavigatorV2Post('/navigator/pairings/redeem',
+            ['pairingSecret' => str_repeat('a', 64), 'publicKeyPem' => 'not a public key']),
     ];
 
     foreach ($requests as $request) {
-        $response = $controller->linkApp($request);
-        expect($response->getData(true))->toBe(['error' => 'This Navigator link is invalid or has expired. Generate a new one from the console.']);
+        expect($controller->redeemPairing($request)->getStatusCode())->toBe(403);
     }
-
     expect($controller->credentialLookups)->toBe([]);
 });
 
-test('navigator controller exposes link url settings and current organization token lookup branches', function () {
-    $controller                = new FleetOpsNavigatorControllerProbe();
+test('navigator v2 refuses claim before proof and admin approval', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->pairing = new FleetOpsNavigatorPairingV2Fake();
+    $controller->pairing->issuedCredential = fleetopsNavigatorCredential('flb_test_scoped');
+    $claim = fleetopsNavigatorV2Post('/navigator/pairings/claim',
+        ['pairingSessionId' => str_repeat('c', 64), 'signature' => 'synthetic-final']);
+
+    expect($controller->claimPairing($claim)->getStatusCode())->toBe(403);
+    $proof = fleetopsNavigatorV2Post('/navigator/pairings/proof',
+        ['pairingSessionId' => str_repeat('c', 64), 'signature' => 'synthetic-valid']);
+    expect($controller->provePairing($proof)->getStatusCode())->toBe(200)
+        ->and($controller->claimPairing($claim)->getStatusCode())->toBe(403);
+
+    $approval = fleetopsNavigatorV2Post('/navigator/pairings/approve',
+        ['pairingSessionId' => str_repeat('c', 64), 'deviceConfirmationCode' => str_repeat('a', 12)]);
+    expect($controller->approvePairing($approval)->getStatusCode())->toBe(200)
+        ->and($controller->claimPairing($claim)->getStatusCode())->toBe(200);
+});
+
+test('navigator v2 approval requires authorized administrator', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->pairing = new FleetOpsNavigatorPairingV2Fake();
+    $controller->pairing->proofValid = true;
+    $approval = fleetopsNavigatorV2Post('/navigator/pairings/approve',
+        ['pairingSessionId' => str_repeat('c', 64), 'deviceConfirmationCode' => str_repeat('a', 12)]);
+    expect($controller->approvePairing($approval)->getStatusCode())->toBe(403);
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->adminUser->type = 'driver';
+    expect($controller->approvePairing($approval)->getStatusCode())->toBe(403);
+});
+
+test('navigator v2 admin can only list issuer scoped verified sessions', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->pairing = new FleetOpsNavigatorPairingV2Fake();
+    $body = $controller->pendingPairings(fleetopsNavigatorV2Post(
+        '/navigator/pairings/admin-pending', []
+    ))->getData(true);
+    expect($body['pendingPairings'])->toBe([]);
+    $controller->pairing->proofValid = true;
+    $body = $controller->pendingPairings(fleetopsNavigatorV2Post(
+        '/navigator/pairings/admin-pending', []
+    ))->getData(true);
+    expect($body['pendingPairings'])->toHaveCount(1)
+        ->and($body['pendingPairings'][0]['deviceConfirmationCode'])->toBe(str_repeat('a', 12));
+    $controller->adminUser = null;
+    expect($controller->pendingPairings(fleetopsNavigatorV2Post(
+        '/navigator/pairings/admin-pending', []
+    ))->getStatusCode())->toBe(403);
+});
+
+test('navigator v2 admin cannot approve with wrong device confirmation code', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->adminUser = fleetopsNavigatorUser(fleetopsNavigatorCompany());
+    $controller->pairing = new FleetOpsNavigatorPairingV2Fake();
+    $controller->pairing->proofValid = true;
+    $wrong = fleetopsNavigatorV2Post('/navigator/pairings/approve', [
+        'pairingSessionId' => str_repeat('c', 64),
+        'deviceConfirmationCode' => str_repeat('b', 12),
+    ]);
+    expect($controller->approvePairing($wrong)->getStatusCode())->toBe(403)
+        ->and($controller->pairing->approved)->toBeFalse();
+});
+
+test('navigator v2 status has no credential and only exposes claim challenge after approval', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
+    $controller->pairing = new FleetOpsNavigatorPairingV2Fake();
+    $status = fleetopsNavigatorV2Post('/navigator/pairings/status',
+        ['pairingSessionId' => str_repeat('c', 64)]);
+    $pending = $controller->pairingStatus($status)->getData(true);
+    expect($pending['approved'])->toBeFalse()
+        ->and($pending['claimChallenge'])->toBeNull()
+        ->and(array_key_exists('credential', $pending))->toBeFalse();
+
+    $controller->pairing->proofValid = true;
+    $controller->pairing->approved = true;
+    $approved = $controller->pairingStatus($status)->getData(true);
+    expect($approved['approved'])->toBeTrue()
+        ->and($approved['claimChallenge'])->toHaveLength(64)
+        ->and(array_key_exists('credential', $approved))->toBeFalse();
+});
+
+test('navigator v2 keeps current organization token auth isolated from pairing', function () {
+    $controller = new FleetOpsNavigatorControllerProbe();
     $controller->apiCredential = fleetopsNavigatorCredential('flb_test_key');
     $controller->apiCredential->purpose = null;
-    $controller->organization  = fleetopsNavigatorCompany();
-    $controller->adminUser = fleetopsNavigatorUser($controller->organization);
-    $controller->settings      = ['enabled' => true, 'invite_code_required' => false];
+    $controller->organization = fleetopsNavigatorCompany();
 
-    $linkUrl  = $controller->getLinkAppUrl()->getData(true);
-    $settings = $controller->getDriverOnboardSettings()->getData(true);
-
-    $testKeyRequest = Request::create('/navigator/current-organization', 'GET', [], [], [], [
-        'HTTP_AUTHORIZATION' => 'Bearer flb_test_key',
-    ]);
-    $organization = $controller->getCurrentOrganization($testKeyRequest);
-
-    $controller->apiCredential = null;
-    $secretRequest             = Request::create('/navigator/current-organization', 'GET', [], [], [], [
-        'HTTP_AUTHORIZATION' => 'Bearer $secret',
-    ]);
-    $missing = $controller->getCurrentOrganization($secretRequest);
-
-    parse_str((string) parse_url($linkUrl['linkUrl'], PHP_URL_QUERY), $linkQuery);
-
-    expect($linkUrl['linkUrl'])->toStartWith('http://localhost/int/v1/fleet-ops/navigator/link-app?')
-        ->and($linkQuery)->toBe(fleetopsNavigatorTokenQuery())
-        ->and($controller->tokens->issuedTo)->toBe([['user-uuid', 'company-uuid']])
-        ->and($settings)->toBe(['enabled' => true, 'invite_code_required' => false])
-        ->and($organization)->toBeInstanceOf(Organization::class)
-        ->and($controller->credentialLookups)->toContain(
-            ['token', 'flb_test_key', 'sandbox', false],
-            ['token', '$secret', 'mysql', true]
-        )
-        ->and($controller->organizationLookups)->toBe(['company-uuid'])
-        ->and($missing->getData(true))->toBe(['error' => 'No API key found to fetch company details with.']);
+    $request = Request::create('/navigator/current-organization', 'GET', [], [], [],
+        ['HTTP_AUTHORIZATION' => 'Bearer flb_test_key']);
+    $result = $controller->getCurrentOrganization($request);
+    expect($result)->toBeInstanceOf(Organization::class);
 });

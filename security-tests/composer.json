@@ -1,0 +1,12 @@
+{
+    "name": "gst/rc1-pest-tools",
+    "require-dev": {
+        "pestphp/pest": "3.8.7",
+        "phpunit/phpunit": "11.5.56"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    }
+}

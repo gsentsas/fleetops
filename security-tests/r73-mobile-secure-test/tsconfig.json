@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "lib": ["ES2020", "DOM"]
+  },
+  "include": [
+    "./navigator-v2-secure-credentials.ts",
+    "./navigator-pairing-v2.ts",
+    "./navigator-pairing-v2-message.ts",
+    "./react-native.d.ts"
+  ]
+}

@@ -187,3 +187,75 @@ test('fleetops compatibility routes are registered when public prefix is configu
         ->toContain('int/v1/vendors/{id}/personnels/{contact}')
         ->toContain('int/v1/contacts/{id}/convert-to-vendor');
 });
+
+test('navigator V2 pairing routes are POST-only and protected for issuer operations', function () {
+    $recorder = fleetopsFeatureRecordedRoutes();
+    $routes = collect($recorder->routes);
+
+    $cases = [
+        ['issuePairing','POST','pairings',true,'throttle:5,1'],
+        ['redeemPairing','POST','pairings/redeem',false,'throttle:10,1'],
+        ['provePairing','POST','pairings/proof',false,'throttle:10,1'],
+        ['pairingStatus','POST','pairings/status',false,'throttle:20,1'],
+        ['pendingPairings','POST','pairings/admin-pending',true,'throttle:10,1'],
+        ['approvePairing','POST','pairings/approve',true,'throttle:10,1'],
+        ['claimPairing','POST','pairings/claim',false,'throttle:10,1'],
+        ['revokePairing','DELETE','pairings/{uuid}',true,null],
+        ['rotatePairing','POST','pairings/{uuid}/rotate',true,null],
+    ];
+
+    foreach ($cases as [$action,$method,$suffix,$protected,$rateLimit]) {
+        $matched = $routes->filter(
+            fn ($route) => $route['action'] === "NavigatorController@{$action}"
+                && str_ends_with($route['uri'], "/navigator/{$suffix}")
+        )->values();
+
+        expect($matched)->toHaveCount(1);
+        $route = $matched->first();
+        expect($route['method'])->toBe($method);
+        $middleware = $route['middleware'] ?? [];
+        if ($protected) {
+            expect($middleware)->toContain('fleetbase.protected', \Fleetbase\FleetOps\Http\Middleware\EnsureNavigatorAdminRequest::class);
+        } else {
+            expect($middleware)->not->toContain('fleetbase.protected');
+        }
+        if ($rateLimit !== null) {
+            expect($middleware)->toContain($rateLimit);
+        }
+    }
+
+    $legacy = $routes->filter(
+        fn ($route) => $route['action'] === 'NavigatorController@linkApp'
+            && str_ends_with($route['uri'], '/navigator/link-app')
+    )->values();
+    expect($legacy)->toHaveCount(1)
+        ->and($legacy->first()['method'])->toBe('GET');
+});
+
+test('navigator V2 default FleetOps routes match the isolated mobile HTTPS client path', function () {
+    $original = config('fleetops.api.routing.prefix');
+    config()->set('fleetops.api.routing.prefix', null);
+    config()->set('fleetops.api.routing.internal_prefix', 'int');
+
+    $recorder = new FleetOpsFeatureRouteRecorder();
+    Route::swap($recorder);
+    require dirname(__DIR__, 3) . '/src/routes.php';
+    config()->set('fleetops.api.routing.prefix', $original);
+
+    $cases = [
+        'issuePairing' => 'pairings',
+        'redeemPairing' => 'pairings/redeem',
+        'provePairing' => 'pairings/proof',
+        'pairingStatus' => 'pairings/status',
+        'pendingPairings' => 'pairings/admin-pending',
+        'approvePairing' => 'pairings/approve',
+        'claimPairing' => 'pairings/claim',
+    ];
+    $routes = collect($recorder->routes);
+
+    foreach ($cases as $action => $suffix) {
+        $matches = $routes->filter(fn ($item) => $item['action'] === "NavigatorController@{$action}")->values();
+        expect($matches)->toHaveCount(1);
+        expect($matches->first()['uri'])->toBe("int/v1/fleet-ops/navigator/{$suffix}");
+    }
+});

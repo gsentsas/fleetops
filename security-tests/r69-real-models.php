@@ -1,0 +1,35 @@
+<?php
+declare(strict_types=1);
+require '/fleetbase/api/vendor/autoload.php';
+use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Support\Facades\Facade;
+use Illuminate\Support\Facades\DB;
+use Fleetbase\Models\Company;
+use Fleetbase\Models\User;
+function pass(bool $ok,string $label):void {if(!$ok)throw new RuntimeException($label);echo "R69_".$label."=PASS\n";}
+$cap=new Capsule();
+$cap->addConnection(['driver'=>'mysql','host'=>'gst-r69-mysql','database'=>'synthetic_r69','username'=>'root','password'=>'','charset'=>'utf8mb4','collation'=>'utf8mb4_unicode_ci','prefix'=>''], 'mysql');
+$cap->getContainer()->get('config')->set('database.default','mysql');$cap->addConnection(['driver'=>'mysql','host'=>'gst-r69-mysql','database'=>'synthetic_r69','username'=>'root','password'=>'','charset'=>'utf8mb4','collation'=>'utf8mb4_unicode_ci','prefix'=>'']);$cap->setAsGlobal();$cap->bootEloquent();$container=$cap->getContainer();$container->instance('db',$cap->getDatabaseManager());$container->instance('db.schema',$cap->schema());Facade::setFacadeApplication($container);\Illuminate\Container\Container::setInstance($container);$container->get('config')->set('api.cache.enabled',false); $container->get('config')->set('fleetbase.connection.db','mysql');
+$schema=$cap->schema('mysql');
+foreach(['fleetops_navigator_link_tokens','users','companies'] as $t)$schema->dropIfExists($t);
+$schema->create('companies',function($t){$t->string('uuid',36)->primary();$t->string('name')->nullable();$t->string('public_id')->nullable();$t->softDeletes();$t->timestamps();});
+$schema->create('users',function($t){$t->string('uuid',36)->primary();$t->string('company_uuid',36);$t->string('type');$t->string('status');$t->string('username')->nullable();$t->string('name')->nullable();$t->softDeletes();$t->timestamps();});
+$migration=require '/lab/fork/server/migrations/2026_11_11_000001_create_fleetops_navigator_link_tokens_table.php';
+$migration->up();
+pass($schema->hasTable('fleetops_navigator_link_tokens'),'REAL_MIGRATION_UP');
+pass((new ReflectionClass(User::class))->getFileName()==='/fleetbase/api/vendor/fleetbase/core-api/src/Models/User.php','REAL_USER_MODEL');
+pass((new ReflectionClass(Company::class))->getFileName()==='/fleetbase/api/vendor/fleetbase/core-api/src/Models/Company.php','REAL_COMPANY_MODEL');
+DB::connection('mysql')->table('companies')->insert([['uuid'=>'companyA','name'=>'A','public_id'=>'companyA'],['uuid'=>'companyB','name'=>'B','public_id'=>'companyB']]);
+DB::connection('mysql')->table('users')->insert([['uuid'=>'adminA','company_uuid'=>'companyA','type'=>'admin','status'=>'active','username'=>'userA','name'=>'A'],['uuid'=>'adminB','company_uuid'=>'companyB','type'=>'admin','status'=>'active','username'=>'userB','name'=>'B']]);
+require '/lab/fork/server/src/Support/NavigatorLinkTokenService.php';
+$service=new \Fleetbase\FleetOps\Support\NavigatorLinkTokenService();
+$issuer=User::withoutGlobalScopes()->with('company')->where('uuid','adminB')->first();
+pass($issuer instanceof User && $issuer->company instanceof Company && $issuer->company->uuid==='companyB','REAL_ELOQUENT_TENANT_RELATION');
+$token=$service->issue($issuer);
+pass(strlen($token)===64,'TOKEN_ISSUED');
+$result=$service->redeemWith($token,fn(User $u)=>$u->company_uuid);
+pass($result==='companyB','REAL_MODELS_REDEEM_COMPANY_B');
+pass($service->redeem($token)===null,'REAL_MODELS_REPLAY_REJECTED');
+$migration->down();
+pass(!$schema->hasTable('fleetops_navigator_link_tokens'),'REAL_MIGRATION_DOWN');
+echo "R69_REAL_MODELS_SERVICE=8/8\n";

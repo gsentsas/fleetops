@@ -73,7 +73,8 @@
         "leaflet": "^1.9.4",
         "leaflet-contextmenu": "^1.4.0",
         "leaflet-draw": "^1.0.4",
-        "xlsx": "^0.18.5"
+        "xlsx": "^0.18.5",
+        "qrcode": "1.5.4"
     },
     "devDependencies": {
         "@babel/eslint-parser": "^7.22.15",

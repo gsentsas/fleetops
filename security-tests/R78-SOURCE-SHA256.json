@@ -1,0 +1,8 @@
+{
+  "s92-core-api/src/Http/Controllers/Internal/v1/AuthController.php": "d01a5b819a77e1f675bae36c593ccaf02d0ccf4fde89b43d2c90e1e2260e78b8",
+  "s92-core-api/config/fleetbase.php": "c14c464b07bd678a248d7829874ee1b6d376951c3c2231e4c079b9dca60c5601",
+  "s92-fleetops/server/src/routes.php": "731dffb39052cceac32842944a81c161c66bcc87add6f728c03bf7a2cb0eab6f",
+  "s92-fleetops/server/src/Http/Middleware/EnsureNavigatorAdminRequest.php": "1f706b64def2e372cbaf2e525a33bd1421bce52ff0ff56e1f78ce5adc626edff",
+  "s92-fleetops/server/src/Http/Controllers/Internal/v1/NavigatorController.php": "2e53cf352e95e619dbb4c56d4d2c96b5cfea245bf9ced8b01a8106d0bd511c44",
+  "s92-fleetops/server/src/Support/NavigatorPairingV2Service.php": "5281691a606ac22215c7e4d0bdb936661c9f9ca6ed3052aaedae567cfcc279e5"
+}
