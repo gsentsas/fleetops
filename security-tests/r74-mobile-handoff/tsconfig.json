@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "lib": ["ES2020", "DOM"],
+    "baseUrl": ".",
+    "paths": {
+      "react-native-keychain": [
+        "../r73-mobile-secure-test/node_modules/react-native-keychain"
+      ]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

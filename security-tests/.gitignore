@@ -1,0 +1,16 @@
+/vendor/
+/r71-mobile-typecheck/node_modules/
+/r71-mobile-typecheck/dist/
+/r71-mobile-typecheck/package-lock.json
+/r72-ui-check/node_modules/
+/r72-ui-check/package-lock.json
+/r72-mobile-source/node_modules/
+/r73-qr-lab/node_modules/
+/r73-qr-lab/package-lock.json
+/r73-keychain-api/*.tgz
+/r73-keychain-api/package/
+/r73-mobile-secure-test/node_modules/
+/r73-mobile-secure-test/dist/
+/r74-mobile-handoff/node_modules/
+/r74-mobile-handoff/dist/
+/r74-mobile-handoff/tsconfig.tsbuildinfo

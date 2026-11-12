@@ -1,0 +1,119 @@
+<ContentPanel @title="Appairage sécurisé Navigator V2" @open={{true}} @wrapperClass="bordered-classic">
+    <div data-test-navigator-v2-approvals class="space-y-4">
+        <p class="text-sm text-gray-600 dark:text-gray-300">
+            Les appareils apparaissent uniquement après une preuve cryptographique.
+            Vérifiez que le code affiché ci-dessous correspond exactement au code
+            affiché sur le téléphone à associer.
+        </p>
+        {{#if this.canApprove}}
+            <div class="border rounded p-4 space-y-3 dark:border-gray-700" data-test-navigator-v2-qr-panel>
+                <p class="font-semibold">Associer un nouveau téléphone</p>
+                <p class="text-sm text-gray-600 dark:text-gray-300">
+                    Le QR ne contient qu'un code temporaire à usage unique, valide au maximum 5 minutes.
+                    Scannez-le directement dans Navigator sur votre téléphone.
+                    Ne photographiez pas ce code et ne le partagez pas.
+                </p>
+                {{#if this.qrVisible}}
+                    <img
+                        src={{this.qrImage}}
+                        alt="QR temporaire d'appairage Navigator à scanner uniquement dans l'application"
+                        width="280"
+                        height="280"
+                        class="max-w-full"
+                        data-test-navigator-v2-qr-image
+                    />
+                    <p class="text-xs text-gray-500">Le QR disparaîtra automatiquement à expiration.</p>
+                    <button type="button" class="btn btn-default btn-sm" {{on "click" this.dismissQr}}>
+                        Masquer le QR
+                    </button>
+                {{else}}
+                    <button
+                        type="button"
+                        class="btn btn-primary btn-sm"
+                        disabled={{this.issueQr.isRunning}}
+                        {{on "click" (perform this.issueQr)}}
+                        data-test-navigator-v2-create-qr
+                    >Générer un QR temporaire</button>
+                {{/if}}
+            </div>
+        {{/if}}
+        <div class="flex items-center justify-end">
+            <button
+                type="button"
+                class="btn btn-sm btn-default"
+                disabled={{this.load.isRunning}}
+                {{on "click" this.refresh}}
+                data-test-navigator-v2-refresh
+            >Actualiser les demandes</button>
+        </div>
+
+        {{#unless this.canApprove}}
+            <p class="text-sm text-gray-500">Les permissions administrateur sont requises.</p>
+        {{else if this.unavailable}}
+            <p class="text-sm text-gray-500">
+                Appairage V2 désactivé ou temporairement indisponible.
+                Aucune demande ne peut être approuvée.
+            </p>
+        {{else if this.load.isRunning}}
+            <p class="text-sm text-gray-500">Chargement des demandes…</p>
+        {{else if this.pending.length}}
+            <div class="space-y-3">
+                {{#each this.pending as |session|}}
+                    <div class="border rounded p-3 dark:border-gray-700" data-test-navigator-v2-session>
+                        <p class="text-sm font-semibold">Appareil ayant prouvé sa clé</p>
+                        <p class="font-mono text-lg tracking-wider" data-test-navigator-v2-fingerprint>
+                            {{session.deviceConfirmationCode}}
+                        </p>
+                        <p class="text-xs text-gray-500">
+                            Ce code est une empreinte à comparer sur le téléphone, pas un mot de passe.
+                        </p>
+                        <button
+                            type="button"
+                            class="btn btn-sm btn-default mt-2"
+                            {{on "click" (fn this.select session)}}
+                            data-test-navigator-v2-select
+                        >Vérifier cet appareil</button>
+                    </div>
+                {{/each}}
+            </div>
+        {{else}}
+            <p class="text-sm text-gray-500">Aucune demande d'appairage vérifiée en attente.</p>
+        {{/unless}}
+
+        {{#if this.selected}}
+            <div class="border-t pt-4 dark:border-gray-700 space-y-3" data-test-navigator-v2-review>
+                <p class="font-semibold">Validation manuelle obligatoire</p>
+                <p class="text-sm">
+                    Regardez le téléphone que vous voulez autoriser.
+                    Saisissez vous-même les 12 caractères de son empreinte.
+                    Ne recopiez pas automatiquement le code de cette page.
+                </p>
+                <label for="navigator-v2-code" class="block text-sm font-semibold">
+                    Empreinte affichée sur le téléphone
+                </label>
+                <input
+                    id="navigator-v2-code"
+                    type="text"
+                    class="form-input w-full font-mono"
+                    maxlength="12"
+                    value={{this.confirmation}}
+                    autocomplete="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                    {{on "input" this.typeConfirmation}}
+                    data-test-navigator-v2-code
+                />
+                <div class="flex flex-wrap justify-end gap-2">
+                    <button type="button" class="btn btn-default" {{on "click" this.cancelSelection}}>Annuler</button>
+                    <button
+                        type="button"
+                        class="btn btn-primary"
+                        disabled={{not this.confirmationMatches}}
+                        {{on "click" this.requestApproval}}
+                        data-test-navigator-v2-confirm
+                    >Approuver après comparaison</button>
+                </div>
+            </div>
+        {{/if}}
+    </div>
+</ContentPanel>

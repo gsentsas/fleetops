@@ -1,0 +1,276 @@
+{
+  "prefix": "gst-r78-71ed0e0d",
+  "checks": [
+    {
+      "name": "BAD_PASSWORD",
+      "pass": true,
+      "status": 401,
+      "curl_errno": 0,
+      "seconds": 0.127189
+    },
+    {
+      "name": "LOGIN_adminA",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.134896
+    },
+    {
+      "name": "LOGIN_adminB",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.124016
+    },
+    {
+      "name": "ADMIN_TOKEN_BOUNDED_TTL",
+      "pass": true,
+      "status": null,
+      "curl_errno": null,
+      "seconds": null
+    },
+    {
+      "name": "ADMIN_ISSUE",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.115418
+    },
+    {
+      "name": "QR_PRIVACY_HEADERS",
+      "pass": true,
+      "status": null,
+      "curl_errno": null,
+      "seconds": null
+    },
+    {
+      "name": "SESSION_COOKIE_FLAGS",
+      "pass": true,
+      "status": null,
+      "curl_errno": null,
+      "seconds": null
+    },
+    {
+      "name": "COOKIE_ONLY_NO_AUTHORITY",
+      "pass": true,
+      "status": 401,
+      "curl_errno": 0,
+      "seconds": 0.137773
+    },
+    {
+      "name": "UNTRUSTED_ORIGIN_WITH_BEARER",
+      "pass": true,
+      "status": 403,
+      "curl_errno": 0,
+      "seconds": 0.133012
+    },
+    {
+      "name": "NON_BROWSER_BEARER",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.100159
+    },
+    {
+      "name": "QR_TO_PENDING",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.099568
+    },
+    {
+      "name": "FIRST_DEVICE_PROOF",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.107511
+    },
+    {
+      "name": "ISSUER_PENDING_VISIBLE",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.099526
+    },
+    {
+      "name": "OTHER_TENANT_LIST_EMPTY",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.098972
+    },
+    {
+      "name": "OTHER_TENANT_APPROVAL_DENIED",
+      "pass": true,
+      "status": 403,
+      "curl_errno": 0,
+      "seconds": 0.095775
+    },
+    {
+      "name": "EXACT_ISSUER_APPROVAL",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.096591
+    },
+    {
+      "name": "SECOND_CHALLENGE_AVAILABLE",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.085731
+    },
+    {
+      "name": "FINAL_CREDENTIAL_HTTP",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.13137
+    },
+    {
+      "name": "CLAIM_REPLAY_DENIED",
+      "pass": true,
+      "status": 403,
+      "curl_errno": 0,
+      "seconds": 0.087661
+    },
+    {
+      "name": "PROVISIONING_KEY_CANNOT_READ_ORDERS",
+      "pass": true,
+      "status": 403,
+      "curl_errno": 0,
+      "seconds": 0.107391
+    },
+    {
+      "name": "OTHER_TENANT_REVOKE_DENIED",
+      "pass": true,
+      "status": 403,
+      "curl_errno": 0,
+      "seconds": 0.089445
+    },
+    {
+      "name": "ISSUER_REVOKE_HTTP",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.107905
+    },
+    {
+      "name": "REVOKED_CREDENTIAL_HTTP_DENIED",
+      "pass": true,
+      "status": 401,
+      "curl_errno": 0,
+      "seconds": 0.100472
+    },
+    {
+      "name": "SECOND_REVOKE_DENIED",
+      "pass": true,
+      "status": 403,
+      "curl_errno": 0,
+      "seconds": 0.0904
+    },
+    {
+      "name": "COOKIE_CSRF_APPROVAL_DENIED",
+      "pass": true,
+      "status": 401,
+      "curl_errno": 0,
+      "seconds": 0.085777
+    },
+    {
+      "name": "ORIGIN_SUFFIX_SPOOF_DENIED",
+      "pass": true,
+      "status": 403,
+      "curl_errno": 0,
+      "seconds": 0.096172
+    },
+    {
+      "name": "ADMIN_LOGOUT_HTTP",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.097727
+    },
+    {
+      "name": "LOGOUT_REVOKES_BEARER",
+      "pass": true,
+      "status": 401,
+      "curl_errno": 0,
+      "seconds": 0.107821
+    },
+    {
+      "name": "LOGIN_adminB",
+      "pass": true,
+      "status": 200,
+      "curl_errno": 0,
+      "seconds": 0.109573
+    },
+    {
+      "name": "EXPIRED_ADMIN_TOKEN_DENIED",
+      "pass": true,
+      "status": 401,
+      "curl_errno": 0,
+      "seconds": 0.092638
+    },
+    {
+      "name": "EXPIRED_TOKEN_CANNOT_REAUTHENTICATE",
+      "pass": true,
+      "status": 401,
+      "curl_errno": 0,
+      "seconds": 0.097979
+    },
+    {
+      "name": "INACTIVE_ADMIN_LOGIN_DENIED",
+      "pass": true,
+      "status": 401,
+      "curl_errno": 0,
+      "seconds": 0.087497
+    },
+    {
+      "name": "REDIS_RATE_LIMIT_TWO_HTTP_CONTAINERS",
+      "pass": true,
+      "status": null,
+      "curl_errno": null,
+      "seconds": null
+    }
+  ],
+  "migrations_before": 395,
+  "identity_counts": {
+    "users": 0,
+    "companies": 0,
+    "drivers": 0,
+    "api_credentials": 0,
+    "personal_access_tokens": 0
+  },
+  "migrations_after": 398,
+  "readiness_last_status": "200",
+  "http_exit": 0,
+  "sensitive_values_absent_from_runtime_logs": true,
+  "states": {
+    "mysql": {
+      "Running": true,
+      "OOMKilled": false,
+      "ExitCode": 0
+    },
+    "redis": {
+      "Running": true,
+      "OOMKilled": false,
+      "ExitCode": 0
+    },
+    "api": {
+      "Running": true,
+      "OOMKilled": false,
+      "ExitCode": 0
+    },
+    "api2": {
+      "Running": true,
+      "OOMKilled": false,
+      "ExitCode": 0
+    }
+  },
+  "no_published_ports": true,
+  "network_internal": true,
+  "cleanup_containers": true,
+  "cleanup_network": true,
+  "protected_unchanged": true,
+  "protected_snapshot_service_count": 12
+}

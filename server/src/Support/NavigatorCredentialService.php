@@ -13,6 +13,7 @@ class NavigatorCredentialService
 {
     public function issue(User $issuer): ApiCredential
     {
+        NavigatorDatabaseGuard::assertAtomic();
         return DB::transaction(function () use ($issuer): ApiCredential {
             $issuer = User::query()->where('uuid', $issuer->uuid)->lockForUpdate()->first();
             if (!$issuer || $issuer->type !== 'admin' || $issuer->status !== 'active' || !$issuer->company) {
@@ -51,13 +52,15 @@ class NavigatorCredentialService
 
     public function revoke(User $actor, string $credentialUuid): void
     {
+        NavigatorDatabaseGuard::assertAtomic();
         DB::transaction(function () use ($actor, $credentialUuid): void {
             $actor = User::query()->where('uuid', $actor->uuid)->lockForUpdate()->first();
             if (!$actor || $actor->type !== 'admin' || $actor->status !== 'active') {
                 throw new \RuntimeException('Navigator revocation is not authorized.');
             }
             $credential = ApiCredential::withoutGlobalScopes()->where('uuid', $credentialUuid)->lockForUpdate()->first();
-            if (!$credential || !NavigatorCredentialScope::isNavigator($credential) || $credential->company_uuid !== $actor->company_uuid) {
+            if (!$credential || $credential->trashed() || !NavigatorCredentialScope::isNavigator($credential)
+                || $credential->company_uuid !== $actor->company_uuid) {
                 throw new \RuntimeException('Navigator credential not found.');
             }
             $credential->delete();

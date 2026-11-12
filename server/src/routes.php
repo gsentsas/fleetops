@@ -430,9 +430,16 @@ Route::prefix(config('fleetops.api.routing.prefix'))->namespace('Fleetbase\Fleet
                         // Opened from the Navigator app's QR scan without a session;
                         // NavigatorController::linkApp() requires a single-use token.
                         $router->get('link-app', 'NavigatorController@linkApp');
+                        $router->post('pairings', 'NavigatorController@issuePairing')->middleware(['fleetbase.protected', \Fleetbase\FleetOps\Http\Middleware\EnsureNavigatorAdminRequest::class, 'throttle:5,1']);
+                        $router->post('pairings/redeem', 'NavigatorController@redeemPairing')->middleware('throttle:10,1');
+                        $router->post('pairings/proof', 'NavigatorController@provePairing')->middleware('throttle:10,1');
+                        $router->post('pairings/status', 'NavigatorController@pairingStatus')->middleware('throttle:20,1');
+                        $router->post('pairings/admin-pending', 'NavigatorController@pendingPairings')->middleware(['fleetbase.protected', \Fleetbase\FleetOps\Http\Middleware\EnsureNavigatorAdminRequest::class, 'throttle:10,1']);
+                        $router->post('pairings/approve', 'NavigatorController@approvePairing')->middleware(['fleetbase.protected', \Fleetbase\FleetOps\Http\Middleware\EnsureNavigatorAdminRequest::class, 'throttle:10,1']);
+                        $router->post('pairings/claim', 'NavigatorController@claimPairing')->middleware('throttle:10,1');
                         $router->get('get-link-app', 'NavigatorController@getLinkAppUrl')->middleware(['fleetbase.protected']);
-                        $router->delete('pairings/{uuid}', 'NavigatorController@revokePairing')->middleware(['fleetbase.protected']);
-                        $router->post('pairings/{uuid}/rotate', 'NavigatorController@rotatePairing')->middleware(['fleetbase.protected']);
+                        $router->delete('pairings/{uuid}', 'NavigatorController@revokePairing')->middleware(['fleetbase.protected', \Fleetbase\FleetOps\Http\Middleware\EnsureNavigatorAdminRequest::class]);
+                        $router->post('pairings/{uuid}/rotate', 'NavigatorController@rotatePairing')->middleware(['fleetbase.protected', \Fleetbase\FleetOps\Http\Middleware\EnsureNavigatorAdminRequest::class]);
                     }
                 );
 

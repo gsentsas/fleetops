@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { makeNavigatorPairingMessage } from '../src/services/navigator-pairing-v2-message.ts';
+const session='a'.repeat(64), fingerprint='b'.repeat(64), nonce='c'.repeat(64);
+const canonical=makeNavigatorPairingMessage('proof',session,'company-B',fingerprint,nonce,1800000000);
+const expected=['fleetbase.navigator.pairing.v2/proof',session,'company-B',fingerprint,nonce,'1800000000'].join('\n');
+assert.equal(canonical,expected);
+assert.equal(makeNavigatorPairingMessage('claim',session,'company-B',fingerprint,nonce,1800000000).split('\n')[0],'fleetbase.navigator.pairing.v2/claim');
+assert.throws(()=>makeNavigatorPairingMessage('proof','bad','company-B',fingerprint,nonce,1800000000));
+assert.throws(()=>makeNavigatorPairingMessage('proof',session,'company-A\nspoof',fingerprint,nonce,1800000000));
+assert.throws(()=>makeNavigatorPairingMessage('proof',session,'company-B',fingerprint,nonce,0));
+console.log('R71_CANONICAL_MOBILE_MESSAGE_GATES=5/5');

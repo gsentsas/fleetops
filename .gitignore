@@ -37,3 +37,9 @@ composer.lock
 *.swp
 *.swo
 .DS_Store
+
+# Isolated security tooling dependencies and generated interpreter caches.
+/security-tests/vendor/
+/security-tests/**/node_modules/
+**/__pycache__/
+*.pyc
