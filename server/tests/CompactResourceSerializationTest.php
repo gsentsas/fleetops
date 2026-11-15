@@ -67,7 +67,7 @@ class FleetOpsCompactResourceRequest extends Request
         return is_array($this->input($key));
     }
 
-    public function array(string $key): array
+    public function array($key = null): array
     {
         $value = $this->input($key);
 
@@ -2820,6 +2820,7 @@ test('tracking number resource publishes a scannable qr code content beside the 
     $container->instance('config', new Illuminate\Config\Repository([
         'fleetbase' => ['console' => ['host' => 'console.fleetbase.test', 'subdomain' => null, 'secure' => true]],
     ]));
+    $container->instance('request', $request);
     Illuminate\Container\Container::setInstance($container);
 
     try {
