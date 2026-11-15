@@ -21,6 +21,45 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 
+// Disposable in-memory database for transaction boundaries and QR duplicate reads.
+$capsule = new \Illuminate\Database\Capsule\Manager();
+$capsule->addConnection(['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
+$capsule->addConnection(['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''], 'mysql');
+$capsule->setAsGlobal();
+$capsule->bootEloquent();
+config(['database.default' => 'mysql', 'database.connections.mysql' => [
+    'driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '',
+]]);
+
+$capsule->schema('mysql')->create('proofs', static function (\Illuminate\Database\Schema\Blueprint $table): void {
+    $table->increments('id');
+    $table->string('company_uuid')->nullable();
+    $table->string('order_uuid')->nullable();
+    $table->string('subject_uuid')->nullable();
+    $table->string('subject_type')->nullable();
+    $table->string('remarks')->nullable();
+    $table->softDeletes();
+});
+
+function fleetopsProofErrorResponse(mixed $response): array
+{
+    if ($response instanceof \Illuminate\Http\JsonResponse) {
+        return ['apiError' => $response->getData(true)['error'], 'status' => $response->getStatusCode()];
+    }
+    return $response;
+}
+
+function fleetopsValidTestPng(): string
+{
+    $bitmap = imagecreatetruecolor(2, 2);
+    imagefill($bitmap, 0, 0, imagecolorallocate($bitmap, 34, 102, 170));
+    ob_start();
+    imagepng($bitmap);
+    $contents = ob_get_clean();
+    imagedestroy($bitmap);
+    return $contents;
+}
+
 class FleetOpsApiOrderCrudControllerProbe extends OrderController
 {
     public ?FleetOpsApiOrderCrudFake $order      = null;
@@ -183,6 +222,25 @@ class FleetOpsApiOrderCrudControllerProbe extends OrderController
         return $this->resolvedSubject;
     }
 
+    protected function requireFreshProofAuthorizationSnapshot(): void
+    {
+        // This unit probe uses a disposable SQLite transaction; authorization is
+        // verified in dedicated HTTP/revocation integration tests.
+    }
+
+    protected function lockProofCaptureSubject(Order $order, ?string $type, ?string $subjectId): array
+    {
+        $locked = $this->findOrder($order->public_id, [], [], true);
+        $subject = $this->resolveSubject($locked, $type, $subjectId);
+        if (!$subject) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                new \Illuminate\Http\JsonResponse(['error' => 'Proof subject is unavailable.'], 409)
+            );
+        }
+
+        return [$locked, $subject];
+    }
+
     protected function createProof(array $input): Proof
     {
         $this->createdProofs[] = $input;
@@ -330,8 +388,10 @@ class FleetOpsApiOrderCrudFake extends Order
         parent::__construct($attributes);
 
         $this->trackerFake = new FleetOpsApiOrderTrackerFake($this);
-        $this->uuid        = $attributes['uuid'] ?? 'order-uuid';
-        $this->status      = $attributes['status'] ?? 'created';
+        $this->uuid         = $attributes['uuid'] ?? 'order-uuid';
+        $this->company_uuid = $attributes['company_uuid'] ?? 'company-uuid';
+        $this->public_id    = $attributes['public_id'] ?? 'order-public';
+        $this->status       = $attributes['status'] ?? 'created';
         $this->payload     = (object) [
             'pickup'    => (object) ['public_id' => 'pickup-public'],
             'dropoff'   => (object) ['public_id' => 'dropoff-public'],
@@ -899,7 +959,7 @@ test('api order controller captures signature proof and stores file metadata', f
     $controller->resolvedSubject = $subject;
 
     $response = $controller->captureSignature(new Request([
-        'signature' => 'data:image/png;base64,' . base64_encode('signature-bytes'),
+        'signature' => 'data:image/png;base64,' . base64_encode(fleetopsValidTestPng()),
         'remarks'   => 'Signed by receiver',
         'data'      => ['receiver' => 'Ada'],
         'disk'      => 'local',
@@ -925,7 +985,7 @@ test('api order controller captures signature proof and stores file metadata', f
         ->and($controller->storedFiles[0])->toBe([
             'disk'     => 'local',
             'path'     => 'uploads/company-uuid/signatures/proof_public.png',
-            'contents' => 'signature-bytes',
+            'contents' => fleetopsValidTestPng(),
         ]);
 });
 
@@ -939,7 +999,7 @@ test('api order controller captures base64 photo proofs and links stored files',
     $controller->resolvedSubject = $subject;
 
     $response = $controller->capturePhoto(new Request([
-        'photos'      => [base64_encode('photo-bytes')],
+        'photos'      => [base64_encode(fleetopsValidTestPng())],
         'remarks'     => 'Photo received',
         'data'        => ['angle' => 'front'],
         'disk'        => 'local',
@@ -952,7 +1012,7 @@ test('api order controller captures base64 photo proofs and links stored files',
             'order_uuid'   => 'order-uuid',
             'subject_uuid' => 'subject-uuid',
             'remarks'      => 'Photo received',
-            'raw_data'     => base64_encode('photo-bytes'),
+            'raw_data'     => base64_encode(fleetopsValidTestPng()),
             'data'         => ['angle' => 'front'],
         ])
         ->and($controller->createdFiles[0])->toMatchArray([
@@ -960,13 +1020,13 @@ test('api order controller captures base64 photo proofs and links stored files',
             'uploader_uuid' => 'user-uuid',
             'bucket'        => 'local-bucket',
             'type'          => 'photo',
-            'size'          => strlen('photo-bytes'),
+            'file_size'     => strlen(fleetopsValidTestPng()),
         ])
         ->and($response['proof']->updates[0])->toBe(['file_uuid' => 'file-uuid'])
         ->and($controller->storedFiles[0])->toBe([
             'disk'     => 'local',
             'path'     => 'uploads/company-uuid/photos/proof_public.png',
-            'contents' => 'photo-bytes',
+            'contents' => fleetopsValidTestPng(),
         ]);
 });
 
@@ -999,8 +1059,8 @@ test('api order controller reports proof signature photo and comments error bran
     $controller                = new FleetOpsApiOrderCrudControllerProbe();
     $controller->orderNotFound = true;
 
-    expect($controller->captureSignature(new Request(['signature' => base64_encode('signature')]), 'missing-order'))->toBe(['apiError' => 'Order resource not found.', 'status' => 404])
-        ->and($controller->capturePhoto(new Request(['photos' => [base64_encode('photo')]]), 'missing-order'))->toBe(['apiError' => 'Order resource not found.', 'status' => 404])
+    expect($controller->captureSignature(new Request(['signature' => base64_encode(fleetopsValidTestPng())]), 'missing-order'))->toBe(['apiError' => 'Order resource not found.', 'status' => 404])
+        ->and($controller->capturePhoto(new Request(['photos' => [base64_encode(fleetopsValidTestPng())]]), 'missing-order'))->toBe(['apiError' => 'Order resource not found.', 'status' => 404])
         ->and($controller->proofs(new Request(), 'missing-order'))->toBe(['apiError' => 'Order resource not found.', 'status' => 404])
         ->and($controller->getEditableEntityFields('missing-order', new Request()))->toBe(['apiError' => 'Order resource not found.', 'status' => 404])
         ->and($controller->orderComments('missing-order'))->toBe(['apiError' => 'Order resource not found.', 'status' => 404]);
@@ -1008,8 +1068,8 @@ test('api order controller reports proof signature photo and comments error bran
     $controller        = new FleetOpsApiOrderCrudControllerProbe();
     $controller->order = new FleetOpsApiOrderCrudFake();
 
-    expect($controller->captureSignature(new Request(['signature' => base64_encode('signature')]), 'order-public', 'waypoint_missing'))->toBe(['apiError' => 'Unable to capture signature data.', 'status' => 400])
-        ->and($controller->capturePhoto(new Request(['photos' => [base64_encode('photo')]]), 'order-public', 'waypoint_missing'))->toBe(['apiError' => 'Unable to capture photo as proof.', 'status' => 400])
+    expect($controller->captureSignature(new Request(['signature' => base64_encode(fleetopsValidTestPng())]), 'order-public', 'waypoint_missing'))->toBe(['apiError' => 'Unable to capture signature data.', 'status' => 400])
+        ->and($controller->capturePhoto(new Request(['photos' => [base64_encode(fleetopsValidTestPng())]]), 'order-public', 'waypoint_missing'))->toBe(['apiError' => 'Unable to capture photo as proof.', 'status' => 400])
         ->and($controller->proofs(new Request(), 'order-public', 'waypoint_missing'))->toBe(['apiError' => 'Unable to retrieve proof of delivery for subject.', 'status' => 400]);
 });
 
@@ -1112,16 +1172,16 @@ test('api order controller captures QR proof payloads and validates error branch
     $controller        = new FleetOpsApiOrderCrudControllerProbe();
     $controller->order = new FleetOpsApiOrderCrudFake();
 
-    expect($controller->captureQrScan(new Request(['code' => 'subject-uuid']), 'order-public', 'waypoint_missing'))->toBe([
-        'apiError' => 'Unable to capture QR code data.',
-        'status'   => 400,
+    expect(fleetopsProofErrorResponse($controller->captureQrScan(new Request(['code' => 'subject-uuid']), 'order-public', 'waypoint_missing')))->toBe([
+        'apiError' => 'Proof subject is unavailable.',
+        'status'   => 409,
     ]);
 
     $controller                  = new FleetOpsApiOrderCrudControllerProbe();
     $controller->order           = new FleetOpsApiOrderCrudFake();
     $controller->resolvedSubject = $subject;
 
-    expect($controller->captureQrScan(new Request(['code' => 'wrong-code']), 'order-public', 'waypoint_subject'))->toBe([
+    expect(fleetopsProofErrorResponse($controller->captureQrScan(new Request(['code' => 'wrong-code']), 'order-public', 'waypoint_subject')))->toBe([
         'apiError' => 'Unable to validate QR code data.',
         'status'   => 400,
     ]);
@@ -1157,7 +1217,7 @@ test('api order controller captures QR proof from tracking url codes and barcode
     $controller->resolvedSubject = $subject;
 
     expect($controller->captureQrScan(new Request(['code' => ['type' => 'qr', 'value' => 'ACM1234567890SG']]), 'order-public', 'waypoint_subject'))->toBe([
-        'apiError' => 'Unable to validate QR code data.',
+        'apiError' => 'No QR code data to capture.',
         'status'   => 400,
     ]);
 
@@ -1171,7 +1231,7 @@ test('api order controller captures QR proof from tracking url codes and barcode
         $controller->order           = new FleetOpsApiOrderCrudFake();
         $controller->resolvedSubject = $subject;
 
-        expect($controller->captureQrScan(new Request(['code' => $code]), 'order-public', 'waypoint_subject'))->toBe([
+        expect(fleetopsProofErrorResponse($controller->captureQrScan(new Request(['code' => $code]), 'order-public', 'waypoint_subject')))->toBe([
             'apiError' => 'Unable to validate QR code data.',
             'status'   => 400,
         ])->and($controller->createdProofs)->toBe([]);
