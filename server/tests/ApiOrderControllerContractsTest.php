@@ -22,7 +22,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 
 // Disposable in-memory database for transaction boundaries and QR duplicate reads.
-$capsule = new \Illuminate\Database\Capsule\Manager();
+$capsule = new Illuminate\Database\Capsule\Manager();
 $capsule->addConnection(['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
 $capsule->addConnection(['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''], 'mysql');
 $capsule->setAsGlobal();
@@ -31,7 +31,7 @@ config(['database.default' => 'mysql', 'database.connections.mysql' => [
     'driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '',
 ]]);
 
-$capsule->schema('mysql')->create('proofs', static function (\Illuminate\Database\Schema\Blueprint $table): void {
+$capsule->schema('mysql')->create('proofs', static function (Illuminate\Database\Schema\Blueprint $table): void {
     $table->increments('id');
     $table->string('company_uuid')->nullable();
     $table->string('order_uuid')->nullable();
@@ -43,9 +43,10 @@ $capsule->schema('mysql')->create('proofs', static function (\Illuminate\Databas
 
 function fleetopsProofErrorResponse(mixed $response): array
 {
-    if ($response instanceof \Illuminate\Http\JsonResponse) {
+    if ($response instanceof Illuminate\Http\JsonResponse) {
         return ['apiError' => $response->getData(true)['error'], 'status' => $response->getStatusCode()];
     }
+
     return $response;
 }
 
@@ -57,6 +58,7 @@ function fleetopsValidTestPng(): string
     imagepng($bitmap);
     $contents = ob_get_clean();
     imagedestroy($bitmap);
+
     return $contents;
 }
 
@@ -230,12 +232,10 @@ class FleetOpsApiOrderCrudControllerProbe extends OrderController
 
     protected function lockProofCaptureSubject(Order $order, ?string $type, ?string $subjectId): array
     {
-        $locked = $this->findOrder($order->public_id, [], [], true);
+        $locked  = $this->findOrder($order->public_id, [], [], true);
         $subject = $this->resolveSubject($locked, $type, $subjectId);
         if (!$subject) {
-            throw new \Illuminate\Http\Exceptions\HttpResponseException(
-                new \Illuminate\Http\JsonResponse(['error' => 'Proof subject is unavailable.'], 409)
-            );
+            throw new Illuminate\Http\Exceptions\HttpResponseException(new Illuminate\Http\JsonResponse(['error' => 'Proof subject is unavailable.'], 409));
         }
 
         return [$locked, $subject];
@@ -387,12 +387,12 @@ class FleetOpsApiOrderCrudFake extends Order
     {
         parent::__construct($attributes);
 
-        $this->trackerFake = new FleetOpsApiOrderTrackerFake($this);
+        $this->trackerFake  = new FleetOpsApiOrderTrackerFake($this);
         $this->uuid         = $attributes['uuid'] ?? 'order-uuid';
         $this->company_uuid = $attributes['company_uuid'] ?? 'company-uuid';
         $this->public_id    = $attributes['public_id'] ?? 'order-public';
         $this->status       = $attributes['status'] ?? 'created';
-        $this->payload     = (object) [
+        $this->payload      = (object) [
             'pickup'    => (object) ['public_id' => 'pickup-public'],
             'dropoff'   => (object) ['public_id' => 'dropoff-public'],
             'waypoints' => collect([(object) ['public_id' => 'waypoint-public']]),
