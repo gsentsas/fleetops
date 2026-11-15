@@ -297,6 +297,7 @@ class Order extends Model
     public static function boot(): void
     {
         parent::boot();
+        static::addGlobalScope(new \Fleetbase\FleetOps\Scopes\AssignedDriverOrderScope());
 
         Relation::morphMap(
             [
