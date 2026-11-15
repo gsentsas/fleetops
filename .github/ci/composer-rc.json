@@ -1,0 +1,127 @@
+{
+    "name": "fleetbase/fleetops-api",
+    "version": "0.6.75",
+    "description": "Fleet & Transport Management Extension for Fleetbase",
+    "keywords": [
+        "fleetbase-extension",
+        "fleetops",
+        "last-mile",
+        "tms",
+        "delivery management"
+    ],
+    "license": "AGPL-3.0-or-later",
+    "authors": [
+        {
+            "name": "Fleetbase Pte Ltd.",
+            "email": "hello@fleetbase.io"
+        },
+        {
+            "name": "Ronald A. Richardson",
+            "email": "ron@fleetbase.io"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "barryvdh/laravel-dompdf": "^3.1",
+        "brick/geo": "0.7.2",
+        "cknow/laravel-money": "^8.4.0",
+        "fleetbase/core-api": "dev-security/rc1-fail-closed-tenant-lookup-20261110 as 1.6.74",
+        "geocoder-php/google-maps-places-provider": "^1.4",
+        "giggsey/libphonenumber-for-php": "^8.13",
+        "league/geotools": "^1.1.0",
+        "milon/barcode": "^12.0",
+        "php-http/guzzle7-adapter": "^1.0",
+        "php-units-of-measure/php-units-of-measure": "^2.2",
+        "psr/http-factory-implementation": "*",
+        "rlanvin/php-rrule": "^2.6",
+        "toin0u/geocoder-laravel": "^13.2.2",
+        "webit/eval-math": "^1.0",
+        "spatie/icalendar-generator": "^2.8"
+    },
+    "require-dev": {
+        "illuminate/encryption": "^12.0",
+        "friendsofphp/php-cs-fixer": "^3.34.1",
+        "nunomaduro/collision": "^8.0",
+        "pestphp/pest": "^3.0",
+        "phpstan/phpstan": "^1.10.38",
+        "symfony/var-dumper": "^7.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "Fleetbase\\FleetOps\\": "server/src/",
+            "Fleetbase\\FleetOps\\Seeders\\": "server/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Fleetbase\\Tests\\": "server/tests/"
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Fleetbase\\FleetOps\\Providers\\FleetOpsServiceProvider",
+                "Fleetbase\\FleetOps\\Providers\\EventServiceProvider"
+            ]
+        },
+        "fleetbase/fleetops-api": {
+            "excludes": [
+                "addon",
+                "app",
+                "assets",
+                "config",
+                "tests",
+                "vendor"
+            ]
+        }
+    },
+    "config": {
+        "vendor-dir": "./server_vendor",
+        "sort-packages": true,
+        "preferred-install": "dist",
+        "process-timeout": 0,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true,
+            "php-http/discovery": true
+        },
+        "platform": {
+            "php": "8.2.35"
+        }
+    },
+    "scripts": {
+        "coverage:baseline": [
+            "@test:coverage:clover",
+            "@coverage:summary"
+        ],
+        "coverage:check": [
+            "@test:coverage:clover",
+            "php scripts/coverage-summary.php coverage/clover.xml --fail-under=100"
+        ],
+        "coverage:summary": "php scripts/coverage-summary.php coverage/clover.xml",
+        "lint": "php-cs-fixer fix -v",
+        "test:lint": "php-cs-fixer fix -v --dry-run",
+        "test:coverage": "php scripts/coverage-runner.php --coverage --coverage-text --colors=always",
+        "test:coverage:clover": "mkdir -p coverage && php scripts/coverage-file-runner.php --coverage-clover=coverage/clover.xml --colors=always",
+        "test:types": "phpstan analyse --ansi --memory-limit=4G",
+        "test:unit": "php scripts/pest-file-runner.php --colors=always",
+        "test": [
+            "@test:lint",
+            "@test:types",
+            "@test:unit"
+        ]
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/gsentsas/core-api.git",
+            "only-branches": [
+                "security/rc1-fail-closed-tenant-lookup-20261110"
+            ],
+            "only": [
+                "fleetbase/core-api"
+            ]
+        }
+    ]
+}
