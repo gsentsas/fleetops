@@ -13,7 +13,7 @@ use Symfony\Component\Console\Output\OutputInterface;
  */
 class FleetOpsPruneCommandRunRecorder extends PruneTelematicsData
 {
-    public array $runs = [];
+    public array $runs   = [];
     public int $exitCode = 0;
 
     public function run(InputInterface $input, OutputInterface $output): int

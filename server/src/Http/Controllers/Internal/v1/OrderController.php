@@ -779,6 +779,7 @@ class OrderController extends FleetOpsController
 
         /** @var Order|null $order */
         $order = $query->first();
+
         return $order;
     }
 
@@ -1152,6 +1153,7 @@ class OrderController extends FleetOpsController
                 return response()->error('Place resource is not a valid route destination.', 422);
             }
             $this->setPayloadCurrentServiceStop($order->payload, $stop);
+
             return $order;
         });
 
@@ -1183,6 +1185,7 @@ class OrderController extends FleetOpsController
                     ? substr($photo, strpos($photo, ',') + 1) : $photo;
             }, $photos)]);
         }
+
         return app(\Fleetbase\FleetOps\Http\Controllers\Api\v1\OrderController::class)
             ->capturePhoto($request, $order->public_id, $subjectId === null ? null : $subject->public_id);
     }

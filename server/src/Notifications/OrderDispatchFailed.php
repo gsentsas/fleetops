@@ -6,7 +6,6 @@ use Fleetbase\FleetOps\Events\OrderDispatchFailed as OrderDispatchFailedEvent;
 use Fleetbase\FleetOps\Http\Resources\v1\Order as OrderResource;
 use Fleetbase\FleetOps\Models\Order;
 use Fleetbase\FleetOps\Support\TrackingCode;
-use Fleetbase\FleetOps\Support\Utils;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;

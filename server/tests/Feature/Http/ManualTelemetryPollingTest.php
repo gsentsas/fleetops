@@ -101,8 +101,8 @@ function manualTelemetryFixture(): Telematic
 
 class ManualTelemetryProvider extends ExampleTelemetryProvider
 {
-    public array $requests = [];
-    public bool $fail      = false;
+    public array $requests  = [];
+    public bool $fail       = false;
     public ?int $failOnCall = null;
     public bool $polling    = true;
 
@@ -240,7 +240,7 @@ test('manual requests made while a scheduled sweep holds the poll lease are comp
 
 test('old queued discovery jobs finish quietly when polling was paused after they were queued', function () {
     [$connection, $provider, $registry, $service] = manualTelemetrySetup();
-    $provider->polling = false;
+    $provider->polling                            = false;
     (new SyncTelematicDevicesJob($connection, [], 'old-job'))->handle($registry, $service);
     $fresh = $connection->fresh();
     // A thrown ValidationException would fail the tries=1 job and mark this connection as errored.
@@ -319,9 +319,9 @@ test('polling budget includes durable inbox writes and never extends to the Redi
 
 class ManualPollingQueueJob extends Illuminate\Queue\Jobs\SyncJob
 {
-    public int $reservations = 1;
-    public int $releases = 0;
-    public int $failures = 0;
+    public int $reservations                = 1;
+    public int $releases                    = 0;
+    public int $failures                    = 0;
     public ?PollTelematicTelemetry $command = null;
 
     public function attempts()
@@ -344,7 +344,7 @@ class ManualPollingQueueJob extends Illuminate\Queue\Jobs\SyncJob
 function manualPollingWorker(): Illuminate\Queue\Worker
 {
     $reflection = new ReflectionClass(Illuminate\Queue\Worker::class);
-    $worker = $reflection->newInstanceWithoutConstructor();
+    $worker     = $reflection->newInstanceWithoutConstructor();
     $reflection->getProperty('cache')->setValue($worker, Cache::store());
 
     return $worker;
@@ -353,7 +353,7 @@ function manualPollingWorker(): Illuminate\Queue\Worker
 function manualPollingQueuePayload(PollTelematicTelemetry $job): ManualPollingQueueJob
 {
     $queueJob = new ManualPollingQueueJob(app(), json_encode([
-        'uuid' => 'manual-poll-queue-job', 'maxTries' => $job->tries,
+        'uuid'          => 'manual-poll-queue-job', 'maxTries' => $job->tries,
         'maxExceptions' => $job->maxExceptions, 'retryUntil' => $job->retryUntil()->getTimestamp(),
     ]), 'test', 'default');
     $queueJob->command = $job;
@@ -365,11 +365,11 @@ function manualPollingQueuePayload(PollTelematicTelemetry $job): ManualPollingQu
 test('healthy inbox waiting can exceed five reservations without exhausting provider retries', function () {
     [$connection, $provider, $registry, $service] = manualTelemetrySetup();
     $service->discoverDevices($connection);
-    $job = $GLOBALS['manual_telemetry_jobs'][0];
+    $job      = $GLOBALS['manual_telemetry_jobs'][0];
     $queueJob = manualPollingQueuePayload($job);
     (new Inbox())->accept($connection, [manualTelemetrySample()], 'poll');
     $worker = manualPollingWorker();
-    $check = new ReflectionMethod($worker, 'markJobAsFailedIfAlreadyExceedsMaxAttempts');
+    $check  = new ReflectionMethod($worker, 'markJobAsFailedIfAlreadyExceedsMaxAttempts');
     for ($attempt = 1; $attempt <= 10; $attempt++) {
         $queueJob->reservations = $attempt;
         $check->invoke($worker, 'test', $queueJob, 1);
@@ -384,10 +384,10 @@ test('healthy inbox waiting can exceed five reservations without exhausting prov
 test('five actual provider exceptions fail the manual request independently of waiting reservations', function () {
     [$connection, $provider, $registry, $service] = manualTelemetrySetup();
     $service->discoverDevices($connection);
-    $job = $GLOBALS['manual_telemetry_jobs'][0];
-    $queueJob = manualPollingQueuePayload($job);
-    $worker = manualPollingWorker();
-    $check = new ReflectionMethod($worker, 'markJobAsFailedIfWillExceedMaxExceptions');
+    $job            = $GLOBALS['manual_telemetry_jobs'][0];
+    $queueJob       = manualPollingQueuePayload($job);
+    $worker         = manualPollingWorker();
+    $check          = new ReflectionMethod($worker, 'markJobAsFailedIfWillExceedMaxExceptions');
     $provider->fail = true;
     for ($attempt = 1; $attempt <= 5; $attempt++) {
         expect(fn () => $job->handle($registry, new Inbox()))->toThrow(RuntimeException::class, 'Provider unavailable');
@@ -401,7 +401,7 @@ test('five actual provider exceptions fail the manual request independently of w
 test('absolute retry deadline survives serialization and stops stalled requests', function () {
     [$connection, $provider, $registry, $service] = manualTelemetrySetup();
     $service->discoverDevices($connection);
-    $job = unserialize(serialize($GLOBALS['manual_telemetry_jobs'][0]));
+    $job      = unserialize(serialize($GLOBALS['manual_telemetry_jobs'][0]));
     $deadline = $job->retryUntil()->getTimestamp();
     $queueJob = manualPollingQueuePayload($job);
     Carbon::setTestNow(now()->addMinutes(16));
@@ -412,22 +412,22 @@ test('absolute retry deadline survives serialization and stops stalled requests'
 });
 
 test('legacy serialized poll jobs share a fixed fallback retry deadline', function () {
-    [$connection] = manualTelemetrySetup();
-    $job = new PollTelematicTelemetry($connection->uuid);
+    [$connection]       = manualTelemetrySetup();
+    $job                = new PollTelematicTelemetry($connection->uuid);
     $job->retryDeadline = null;
-    $deadline = $job->retryUntil()->getTimestamp();
+    $deadline           = $job->retryUntil()->getTimestamp();
     Carbon::setTestNow(now()->addMinutes(5));
-    $restored = new PollTelematicTelemetry($connection->uuid);
+    $restored                = new PollTelematicTelemetry($connection->uuid);
     $restored->retryDeadline = null;
     expect($restored->retryUntil()->getTimestamp())->toBe($deadline);
 });
 
 test('incomplete sweep deliveries do not finish a manual request awaiting provider retry', function () {
     [$connection, $provider, $registry, $service] = manualTelemetrySetup();
-    $id = $service->discoverDevices($connection);
-    ExampleTelemetryProvider::$pages = [['devices' => [manualTelemetrySample()], 'has_more' => true, 'next_cursor' => 1]];
-    $provider->failOnCall = 2;
-    $job = $GLOBALS['manual_telemetry_jobs'][0];
+    $id                                           = $service->discoverDevices($connection);
+    ExampleTelemetryProvider::$pages              = [['devices' => [manualTelemetrySample()], 'has_more' => true, 'next_cursor' => 1]];
+    $provider->failOnCall                         = 2;
+    $job                                          = $GLOBALS['manual_telemetry_jobs'][0];
     expect(fn () => $job->handle($registry, new Inbox()))->toThrow(RuntimeException::class);
     manualTelemetryProcessPending($service);
     expect(data_get($connection->fresh()->meta, 'last_sync_result'))->toBe('retrying');
@@ -437,7 +437,7 @@ test('incomplete sweep deliveries do not finish a manual request awaiting provid
 
 test('expired scheduled polls stop without provider work when no queue job is attached', function () {
     [$connection, $provider, $registry] = manualTelemetrySetup();
-    $job = new PollTelematicTelemetry($connection->uuid);
+    $job                                = new PollTelematicTelemetry($connection->uuid);
     Carbon::setTestNow(now()->addMinutes(16));
     $job->handle($registry, new Inbox());
     // Scheduled polls have no manual request to fail; the next tick schedules a fresh attempt.
@@ -464,9 +464,9 @@ test('manual polls release instead of dropping the request while another sweep h
 
 test('superseded manual polls neither report progress nor fail the newer request', function () {
     [$connection, $provider, $registry, $service] = manualTelemetrySetup();
-    $current = $service->discoverDevices($connection);
-    $stale = new PollTelematicTelemetry($connection->uuid, 'superseded-job');
-    ExampleTelemetryProvider::$pages = [['devices' => [manualTelemetrySample()], 'has_more' => false, 'next_cursor' => null]];
+    $current                                      = $service->discoverDevices($connection);
+    $stale                                        = new PollTelematicTelemetry($connection->uuid, 'superseded-job');
+    ExampleTelemetryProvider::$pages              = [['devices' => [manualTelemetrySample()], 'has_more' => false, 'next_cursor' => null]];
     $stale->handle($registry, new Inbox());
     $stale->failed(new RuntimeException('Provider unavailable'));
     $fresh = $connection->fresh();
@@ -485,7 +485,6 @@ test('manual sync re-checks the locked connection before queueing', function () 
         ->and(DB::table('telematics')->value('status'))->toBe('disabled');
 });
 
-
 function manualTelemetryConnectionState(Telematic $connection, string $status, array $meta): void
 {
     DB::table('telematics')->where('uuid', $connection->uuid)->update(['status' => $status, 'meta' => json_encode($meta)]);
@@ -494,7 +493,7 @@ function manualTelemetryConnectionState(Telematic $connection, string $status, a
 test('completed scheduled sweeps replace a stale sync failure without saving through the model', function () {
     [$connection, $provider, $registry, $service] = manualTelemetrySetup();
     manualTelemetryConnectionState($connection, 'error', [
-        'last_sync_job_id' => 'lost-request', 'last_sync_result' => 'failed', 'last_sync_error' => 'Polling retries exhausted. MaxAttemptsExceededException',
+        'last_sync_job_id'       => 'lost-request', 'last_sync_result' => 'failed', 'last_sync_error' => 'Polling retries exhausted. MaxAttemptsExceededException',
         'last_sync_completed_at' => '2026-06-24 07:32:18', 'preserved' => 'yes',
     ]);
     ExampleTelemetryProvider::$pages = [['devices' => [manualTelemetrySample()], 'has_more' => false, 'next_cursor' => null]];
@@ -529,7 +528,7 @@ test('scheduled sweeps adopt abandoned requests but never one bound to a sweep i
     [$connection, $provider, $registry, $service] = manualTelemetrySetup();
     DB::table('telematic_sync_runs')->insert(['uuid' => 'bound-run', 'telematic_uuid' => $connection->uuid, 'status' => $boundStatus, 'created_at' => now(), 'updated_at' => now()]);
     manualTelemetryConnectionState($connection, 'synchronizing', [
-        'last_sync_job_id' => 'abandoned-request', 'last_sync_result' => 'retrying',
+        'last_sync_job_id'   => 'abandoned-request', 'last_sync_result' => 'retrying',
         'last_sync_run_uuid' => 'bound-run', 'last_sync_run_job_id' => 'abandoned-request',
     ]);
     ExampleTelemetryProvider::$pages = [['devices' => [manualTelemetrySample()], 'has_more' => false, 'next_cursor' => null]];
@@ -540,6 +539,6 @@ test('scheduled sweeps adopt abandoned requests but never one bound to a sweep i
         ->and(data_get($fresh->meta, 'last_sync_result'))->toBe($adopted ? 'success' : 'retrying')
         ->and(data_get($fresh->meta, 'last_sync_run_uuid'))->toBe($adopted ? DB::table('telematic_sync_runs')->where('uuid', '!=', 'bound-run')->value('uuid') : 'bound-run');
 })->with([
-    'interrupted run' => ['incomplete', true],
+    'interrupted run'     => ['incomplete', true],
     'run still ingesting' => ['ingesting', false],
 ]);

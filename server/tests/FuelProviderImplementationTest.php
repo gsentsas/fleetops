@@ -205,7 +205,7 @@ class FleetOpsFuelProviderServiceHarness extends FuelProviderService
             'fuel_report_uuid'        => $payload['fuel_report_uuid'] ?? null,
         ], $payload));
         $transaction->wasRecentlyCreated = true;
-        $transaction->createdFuelReport = (bool) $transaction->fuel_report_uuid;
+        $transaction->createdFuelReport  = (bool) $transaction->fuel_report_uuid;
 
         return $transaction;
     }

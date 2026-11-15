@@ -5,7 +5,6 @@ namespace Fleetbase\FleetOps\Notifications;
 use Fleetbase\FleetOps\Http\Resources\v1\Order as OrderResource;
 use Fleetbase\FleetOps\Models\Order;
 use Fleetbase\FleetOps\Support\TrackingCode;
-use Fleetbase\FleetOps\Support\Utils;
 use Fleetbase\Support\PushNotification;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Bus\Queueable;

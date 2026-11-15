@@ -282,7 +282,7 @@ test('saving tracking page settings indexes the slug and frees the old one', fun
 
     // A previous slug that another company now holds is left alone.
     $probe->settings[TrackingPageConfig::SLUG_INDEX_PREFIX . 'northwind-couriers'] = 'company-2';
-    $probe->configured                                                            = [];
+    $probe->configured                                                             = [];
     $probe->saveTrackingPageSettings(fleetopsTrackingPageRequest(['org_page' => ['enabled' => false, 'slug' => 'northwind-express']]));
 
     expect($probe->configured)->toBe([[TrackingPageConfig::SLUG_INDEX_PREFIX . 'northwind-express', 'company-1']])
@@ -291,7 +291,7 @@ test('saving tracking page settings indexes the slug and frees the old one', fun
 
 test('an enabled organization page refuses an unusable slug while a disabled one keeps it unindexed', function () {
     $probe                                                                  = fleetopsTrackingPageProbe();
-    $probe->settings[TrackingPageConfig::SLUG_INDEX_PREFIX . 'taken-slug'] = 'company-2';
+    $probe->settings[TrackingPageConfig::SLUG_INDEX_PREFIX . 'taken-slug']  = 'company-2';
 
     expect($probe->saveTrackingPageSettings(fleetopsTrackingPageRequest(['org_page' => ['enabled' => true, 'slug' => 'taken-slug']]))->getData(true))
         ->toBe(['error' => 'Another organization already uses this address.'])
@@ -311,8 +311,8 @@ test('an enabled organization page refuses an unusable slug while a disabled one
 
 test('tracking page slugs can be checked while typed', function () {
     $probe                                                                 = fleetopsTrackingPageProbe();
-    $probe->settings[TrackingPageConfig::SLUG_INDEX_PREFIX . 'northwind'] = 'company-1';
-    $probe->settings[TrackingPageConfig::SLUG_INDEX_PREFIX . 'harbor']    = 'company-2';
+    $probe->settings[TrackingPageConfig::SLUG_INDEX_PREFIX . 'northwind']  = 'company-1';
+    $probe->settings[TrackingPageConfig::SLUG_INDEX_PREFIX . 'harbor']     = 'company-2';
 
     expect($probe->validateTrackingPageSlug(new Request(['slug' => ' Northwind ']))->getData(true))
         ->toBe(['slug' => 'northwind', 'valid' => true, 'code' => 'available', 'message' => 'This address is available.'])

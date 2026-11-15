@@ -98,7 +98,7 @@ class FleetOpsFuelProviderConnectionFake extends FuelProviderConnection
 
 class FleetOpsFuelProviderSyncRunFake extends FuelProviderSyncRun
 {
-    public bool $freshForTest = false;
+    public bool $freshForTest    = false;
     public array $updatesForTest = [];
 
     public function update(array $attributes = [], array $options = [])
@@ -365,10 +365,10 @@ test('disabled fuel connections cannot queue imports', function () {
 });
 
 test('failed fuel sync dispatch marks the run as failed and propagates the broker error', function () {
-    $service = new FleetOpsFuelProviderConnectionServiceFake();
-    $controller = fleetopsFuelProviderConnectionController($service);
-    $controller->connection = new FleetOpsFuelProviderConnectionFake(['uuid' => 'connection-uuid', 'status' => 'active']);
-    $error = new RuntimeException('Queue broker unavailable');
+    $service                                         = new FleetOpsFuelProviderConnectionServiceFake();
+    $controller                                      = fleetopsFuelProviderConnectionController($service);
+    $controller->connection                          = new FleetOpsFuelProviderConnectionFake(['uuid' => 'connection-uuid', 'status' => 'active']);
+    $error                                           = new RuntimeException('Queue broker unavailable');
     Fleetbase\TestSupport\DispatchRecorder::$failure = $error;
     try {
         expect(fn () => $controller->sync(new Request(['async' => true]), 'connection-uuid'))->toThrow(RuntimeException::class, 'Queue broker unavailable');

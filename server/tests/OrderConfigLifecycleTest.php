@@ -101,8 +101,8 @@ test('transitions follow only the configured graph', function () {
 });
 
 test('a configuration-only change (added activity) is honoured without code changes', function () {
-    $config = customLifecycleConfig();
-    $flow   = json_decode($config->getAttributes()['flow'], true);
+    $config                         = customLifecycleConfig();
+    $flow                           = json_decode($config->getAttributes()['flow'], true);
     $flow['active']['activities'][] = 'inspection';
     $flow['inspection']             = lifecycleActivity('inspection', ['returned']);
     $config->setRawAttributes(['flow' => json_encode($flow), 'meta' => $config->getAttributes()['meta']]);

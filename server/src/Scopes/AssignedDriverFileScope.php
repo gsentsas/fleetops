@@ -14,15 +14,21 @@ class AssignedDriverFileScope implements Scope
 {
     public function apply(Builder $builder, Model $model): void
     {
-        if (!app()->bound('request') || !request()->route()) return;
+        if (!app()->bound('request') || !request()->route()) {
+            return;
+        }
         $controller = request()->route()->getControllerClass();
         if (!in_array($controller, [
             \Fleetbase\Http\Controllers\Api\v1\FileController::class,
             \Fleetbase\Http\Controllers\Internal\v1\FileController::class,
-        ], true)) return;
+        ], true)) {
+            return;
+        }
         $user = Auth::getUserFromSession(request());
-        if (!$user || $user->type !== 'driver') return;
-        $company = session('company') ?: '';
+        if (!$user || $user->type !== 'driver') {
+            return;
+        }
+        $company  = session('company') ?: '';
         $fileUuid = $model->qualifyColumn('uuid');
         $builder->where($model->qualifyColumn('company_uuid'), $company)
             ->where(function ($files) use ($model, $user, $company, $fileUuid) {

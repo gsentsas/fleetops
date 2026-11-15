@@ -1,11 +1,12 @@
-name: RC dependency resolution probe
+name: RC locked dependency audit
 
 on:
   pull_request:
     branches: [ 'security/rc1-service-quote-request-tenant-20261111' ]
     paths:
       - '.github/workflows/composer-rc-probe.yml'
-      - '.github/ci/composer-rc.json'
+      - 'composer.json'
+      - 'composer.lock'
 
 permissions:
   contents: read
@@ -39,7 +40,7 @@ jobs:
           tools: composer:2.11.2
           coverage: none
 
-      - name: Resolve proposed manifest without installing packages
+      - name: Audit committed lock without installing packages
         env:
           COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ github.token }}"}}'
           COMPOSER_HOME: ${{ runner.temp }}/rc-composer-home
@@ -48,10 +49,9 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/rc-composer-probe"
-          cp .github/ci/composer-rc.json "$RUNNER_TEMP/rc-composer-probe/composer.json"
+          cp composer.json composer.lock "$RUNNER_TEMP/rc-composer-probe/"
           cd "$RUNNER_TEMP/rc-composer-probe"
           composer validate
-          composer update --no-install --no-scripts --no-interaction --no-progress
           php -r '$j=json_decode(file_get_contents("composer.lock"),true,512,JSON_THROW_ON_ERROR); $core=array_values(array_filter($j["packages"],static fn($p)=>$p["name"]==="fleetbase/core-api")); if(count($core)!==1 || $core[0]["source"]["reference"]!=="4235a8661e1b08ff448db86d0eaedb76e3162739") exit(1);'
           composer audit --locked --format=json > audit.json
           sha256sum composer.json composer.lock audit.json > evidence.sha256

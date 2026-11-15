@@ -37,8 +37,8 @@ use Fleetbase\Models\Setting;
 use Fleetbase\Support\Auth;
 use Fleetbase\Support\TemplateString;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
-use Illuminate\Http\Request;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
@@ -1531,6 +1531,7 @@ class OrderController extends Controller
                     return response()->apiError('Place resource is not a valid destination.', 422);
                 }
                 $this->setPayloadCurrentServiceStop($payload, $stop);
+
                 return $order;
             });
         } catch (ModelNotFoundException $exception) {
@@ -1631,22 +1632,25 @@ class OrderController extends Controller
                     ->where('order_uuid', $lockedOrder->uuid)->where('subject_uuid', $subject->uuid)
                     ->where('subject_type', Utils::getModelClassName($subject))
                     ->where('remarks', 'Verified by QR Code Scan')->lockForUpdate()->first();
+
                 return $existing ?? $this->createProof([
                     'company_uuid' => $lockedOrder->company_uuid,
-                    'order_uuid' => $lockedOrder->uuid,
+                    'order_uuid'   => $lockedOrder->uuid,
                     'subject_uuid' => $subject->uuid,
                     'subject_type' => Utils::getModelClassName($subject),
-                    'remarks' => 'Verified by QR Code Scan',
-                    'raw_data' => $request->input('raw_data'),
-                    'data' => $request->input('data', []),
+                    'remarks'      => 'Verified by QR Code Scan',
+                    'raw_data'     => $request->input('raw_data'),
+                    'data'         => $request->input('data', []),
                 ]);
             });
         } catch (HttpResponseException $exception) {
             return $exception->getResponse();
         } catch (\Throwable $exception) {
             Log::warning('Proof QR persistence failed', ['exception_class' => get_class($exception)]);
+
             return $this->apiError('Unable to store proof of delivery.', 503);
         }
+
         return $this->proofResource($proof);
     }
 
@@ -1731,7 +1735,7 @@ class OrderController extends Controller
                 $data, $disk, $bucket, $companyUuid, $type, $subjectId, &$storedPaths
             ) {
                 [$lockedOrder, $subject] = $this->lockProofCaptureSubject($order, $type, $subjectId);
-                $proof = $this->createProof([
+                $proof                   = $this->createProof([
                     'company_uuid' => $companyUuid,
                     'order_uuid'   => $lockedOrder->uuid,
                     'subject_uuid' => $subject->uuid,
@@ -1740,7 +1744,7 @@ class OrderController extends Controller
                     'raw_data'     => $signature,
                     'data'         => $data,
                 ]);
-                $path = 'uploads/' . $companyUuid . '/signatures/' . $proof->public_id . '.png';
+                $path          = 'uploads/' . $companyUuid . '/signatures/' . $proof->public_id . '.png';
                 $storedPaths[] = $path;
                 $this->putStorage($disk, $path, $signatureContents);
 
@@ -1764,10 +1768,12 @@ class OrderController extends Controller
             });
         } catch (HttpResponseException $exception) {
             $this->cleanupIncompleteProofFiles($disk, $storedPaths);
+
             return $exception->getResponse();
         } catch (\Throwable $exception) {
             $this->cleanupIncompleteProofFiles($disk, $storedPaths);
             Log::warning('Proof signature persistence failed', ['exception_class' => get_class($exception)]);
+
             return $this->apiError('Unable to store proof of delivery.', 503);
         }
 
@@ -1808,6 +1814,7 @@ class OrderController extends Controller
                             if ($this->inspectIncomingProofImage($value) === null) {
                                 $fail("{$attribute} must contain a valid image of at most 10 MB.");
                             }
+
                             return;
                         }
 
@@ -1872,8 +1879,8 @@ class OrderController extends Controller
         // Multipart requests can expose an uploaded file in both the
         // validation input bag and the files bag. Count actual uploads once.
         // JSON-only input still rejects silently filtered non-string values.
-        if (count($incoming) > 10 || (empty($rawInputs) &&
-            count($incoming) !== count($request->input('photos', [])))) {
+        if (count($incoming) > 10 || (empty($rawInputs)
+            && count($incoming) !== count($request->input('photos', [])))) {
             return $this->apiError('Photo batch contains invalid inputs.', 422);
         }
 
@@ -1952,14 +1959,17 @@ class OrderController extends Controller
                     );
                     $proof->update(['file_uuid' => $file->uuid]);
                 }
+
                 return $proof;
             });
         } catch (HttpResponseException $exception) {
             $this->cleanupIncompleteProofFiles($disk, $storedPaths);
+
             return $exception->getResponse();
         } catch (\Throwable $exception) {
             $this->cleanupIncompleteProofFiles($disk, $storedPaths);
             Log::warning('Proof photo persistence failed', ['exception_class' => get_class($exception)]);
+
             return $this->apiError('Unable to store proof of delivery.', 503);
         }
 
@@ -2041,6 +2051,7 @@ class OrderController extends Controller
             throw new HttpResponseException(new \Illuminate\Http\JsonResponse(['error' => 'Proof subject is unavailable.'], 409));
         }
         $this->assertProofCaptureAllowed($locked, $subject);
+
         return [$locked, $subject];
     }
 
@@ -2054,18 +2065,19 @@ class OrderController extends Controller
             if ($subject instanceof Waypoint || $subject instanceof Place || $subject instanceof Entity) {
                 throw new HttpResponseException(new \Illuminate\Http\JsonResponse(['error' => 'Proof requires an active order payload.'], 409));
             }
+
             return;
         }
         if (!$this->payloadUsesServiceStopActivity($payload)) {
             return;
         }
-        $current = $this->payloadCurrentServiceStop($payload);
+        $current   = $this->payloadCurrentServiceStop($payload);
         $requested = $subject instanceof Waypoint || $subject instanceof Place
             ? $this->resolveServiceStopFromKey($payload, $subject->uuid) : null;
         $entityAtCurrentStop = $subject instanceof Entity && $current
             && $subject->destination_uuid === ($current['place']->uuid ?? null);
-        if (!$current || (!$entityAtCurrentStop &&
-            (!$requested || (int) $requested['sequence'] !== (int) $current['sequence']))
+        if (!$current || (!$entityAtCurrentStop
+            && (!$requested || (int) $requested['sequence'] !== (int) $current['sequence']))
             || $this->serviceStopIsComplete($order, $payload, $current)) {
             throw new HttpResponseException(new \Illuminate\Http\JsonResponse(['error' => 'Proof must target the active unfinished stop.'], 409));
         }
@@ -2077,8 +2089,8 @@ class OrderController extends Controller
         if ($size === 0 || $size > 10 * 1024 * 1024) {
             return null;
         }
-        $info = @getimagesizefromstring($contents);
-        $mime = (new \finfo(FILEINFO_MIME_TYPE))->buffer($contents);
+        $info       = @getimagesizefromstring($contents);
+        $mime       = (new \finfo(FILEINFO_MIME_TYPE))->buffer($contents);
         $extensions = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif'];
         if (!is_array($info) || ($info['mime'] ?? null) !== $mime
             || !isset($extensions[$mime])
@@ -2093,8 +2105,9 @@ class OrderController extends Controller
             return null;
         }
         unset($bitmap);
+
         return [
-            'contents' => $contents, 'size' => $size,
+            'contents'     => $contents, 'size' => $size,
             'content_type' => $mime, 'extension' => $extensions[$mime],
         ];
     }
@@ -2114,6 +2127,7 @@ class OrderController extends Controller
             }
             $contents = base64_decode($photo, true);
         }
+
         return is_string($contents) ? $this->inspectProofImage($contents) : null;
     }
 
@@ -2125,7 +2139,7 @@ class OrderController extends Controller
             } catch (\Throwable $exception) {
                 Log::error('Proof file cleanup failed', [
                     'exception_class' => get_class($exception),
-                    'storage_disk' => $disk,
+                    'storage_disk'    => $disk,
                 ]);
             }
         }
@@ -2268,7 +2282,7 @@ class OrderController extends Controller
         string $id,
         array $with = [],
         array $columns = [],
-        bool $lockForUpdate = false
+        bool $lockForUpdate = false,
     ): Order {
         // The fourth argument to findRecordOrFail is a query callback, not
         // a boolean. It must apply the SQL row lock before first().

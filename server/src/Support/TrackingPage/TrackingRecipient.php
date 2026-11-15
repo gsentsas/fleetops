@@ -44,7 +44,7 @@ class TrackingRecipient
         $class = match (true) {
             is_a($scope->customer_type, Contact::class, true) => Contact::class,
             is_a($scope->customer_type, Vendor::class, true)  => Vendor::class,
-            default                                          => null,
+            default                                           => null,
         };
 
         return $class ? $class::withoutGlobalScopes()->where('uuid', $scope->customer_uuid)->first() : null;

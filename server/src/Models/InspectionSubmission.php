@@ -4,6 +4,7 @@ namespace Fleetbase\FleetOps\Models;
 
 use Fleetbase\Casts\Json;
 use Fleetbase\FleetOps\Support\InspectionFileStore;
+use Fleetbase\LaravelMysqlSpatial\Types\Point;
 use Fleetbase\Models\Category;
 use Fleetbase\Models\CustomField;
 use Fleetbase\Models\CustomFieldValue;
@@ -17,7 +18,6 @@ use Fleetbase\Traits\HasPublicId;
 use Fleetbase\Traits\HasUuid;
 use Fleetbase\Traits\Searchable;
 use Fleetbase\Traits\TracksApiCredential;
-use Fleetbase\LaravelMysqlSpatial\Types\Point;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;

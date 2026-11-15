@@ -1,7 +1,7 @@
 <?php
 
-use Fleetbase\FleetOps\Models\Telematic;
 use Fleetbase\FleetOps\Exceptions\TelematicProviderException;
+use Fleetbase\FleetOps\Models\Telematic;
 use Fleetbase\FleetOps\Support\Telematics\Providers\SafeeProvider;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Carbon;
@@ -193,7 +193,7 @@ test('safee provider fetches bounded live state batches with identity diagnostic
     ]);
 
     $result = $provider->fetchDevices([
-        'limit' => 50,
+        'limit'             => 50,
         'refresh_inventory' => true,
     ]);
 

@@ -389,7 +389,7 @@ test('terminal worker failures mark a sync failed without destroying its last su
 });
 
 test('ingestion persists the report returned by a custom report resolution strategy', function () {
-    $db = fleetopsFuelServiceMatchingBoot();
+    $db         = fleetopsFuelServiceMatchingBoot();
     $connection = fleetopsFuelServiceMatchingConnection($db);
     $db->table('vehicles')->insert(['uuid' => 'vehicle-1', 'company_uuid' => 'company-1', 'plate_number' => 'SGX-1234']);
     $db->table('fuel_reports')->insert(['uuid' => 'existing-report', 'company_uuid' => 'company-1', 'vehicle_uuid' => 'vehicle-1']);

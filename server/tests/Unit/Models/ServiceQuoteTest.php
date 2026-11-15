@@ -377,17 +377,17 @@ test('service quote resolves request references from uuid and public id', functi
     session(['company' => 'company-service-quote']);
     $uuidQuote = new ServiceQuote();
     $uuidQuote->setRawAttributes([
-        'uuid'     => '11111111-1111-4111-8111-111111111111',
-        'amount'   => 1500,
-        'currency' => 'SGD',
+        'uuid'         => '11111111-1111-4111-8111-111111111111',
+        'amount'       => 1500,
+        'currency'     => 'SGD',
         'company_uuid' => 'company-service-quote',
     ], true);
 
     $idQuote = new ServiceQuote();
     $idQuote->setRawAttributes([
-        'uuid'     => '22222222-2222-4222-8222-222222222222',
-        'amount'   => 2750,
-        'currency' => 'USD',
+        'uuid'         => '22222222-2222-4222-8222-222222222222',
+        'amount'       => 2750,
+        'currency'     => 'USD',
         'company_uuid' => 'company-service-quote',
     ], true);
 

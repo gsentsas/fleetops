@@ -109,7 +109,7 @@ class FleetOpsInternalOrderLifecycleControllerProbe extends OrderController
     public Collection $proofResults;
     public array $exportDownloads                                    = [];
     public ?FleetOpsInternalOrderLifecycleOrderFake $trackingOrder   = null;
-    public array $trackingLookups                                   = [];
+    public array $trackingLookups                                    = [];
     public ?FleetOpsInternalOrderLifecycleOrderFake $scheduleOrder   = null;
     public ?FleetOpsInternalOrderLifecycleDriverFake $scheduleDriver = null;
 
