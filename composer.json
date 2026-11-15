@@ -21,11 +21,11 @@
         }
     ],
     "require": {
-        "php": "^8.0",
+        "php": "^8.2",
         "barryvdh/laravel-dompdf": "^3.1",
         "brick/geo": "0.7.2",
         "cknow/laravel-money": "^8.4.0",
-        "fleetbase/core-api": "^1.6.74",
+        "fleetbase/core-api": "dev-security/rc1-fail-closed-tenant-lookup-20261110 as 1.6.74",
         "geocoder-php/google-maps-places-provider": "^1.4",
         "giggsey/libphonenumber-for-php": "^8.13",
         "league/geotools": "^1.1.0",
@@ -39,12 +39,12 @@
         "spatie/icalendar-generator": "^2.8"
     },
     "require-dev": {
-        "illuminate/encryption": "^9.0|^10.0",
+        "illuminate/encryption": "^12.0",
         "friendsofphp/php-cs-fixer": "^3.34.1",
-        "nunomaduro/collision": "^7.0",
-        "pestphp/pest": "^2.33.2",
+        "nunomaduro/collision": "^8.0",
+        "pestphp/pest": "^3.0",
         "phpstan/phpstan": "^1.10.38",
-        "symfony/var-dumper": "^5.4.29"
+        "symfony/var-dumper": "^7.4"
     },
     "autoload": {
         "psr-4": {
@@ -85,6 +85,9 @@
         "allow-plugins": {
             "pestphp/pest-plugin": true,
             "php-http/discovery": true
+        },
+        "platform": {
+            "php": "8.2.35"
         }
     },
     "scripts": {
@@ -108,5 +111,17 @@
             "@test:types",
             "@test:unit"
         ]
-    }
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/gsentsas/core-api.git",
+            "only-branches": [
+                "security/rc1-fail-closed-tenant-lookup-20261110"
+            ],
+            "only": [
+                "fleetbase/core-api"
+            ]
+        }
+    ]
 }
