@@ -46,7 +46,23 @@ if (!function_exists('config')) {
 
 if (class_exists('Illuminate\Container\Container') && class_exists('Illuminate\Support\Facades\Facade')) {
     $app = Illuminate\Container\Container::getInstance();
+    if (get_class($app) === Illuminate\Container\Container::class && $app->getBindings() === []
+        && !$app->bound('config') && !$app->bound('db') && !$app->bound('request')) {
+        // Match Laravel Application's console flag for these CLI component tests.
+        // Native HTTP/authentication acceptance is run separately through Octane.
+        $app = new class extends Illuminate\Container\Container {
+            public function runningInConsole(): bool
+            {
+                return in_array(PHP_SAPI, ['cli', 'phpdbg'], true);
+            }
+        };
+        Illuminate\Container\Container::setInstance($app);
+    }
     Illuminate\Support\Facades\Facade::setFacadeApplication($app);
+
+    if (!$app->bound('request') && class_exists('Illuminate\Http\Request')) {
+        $app->instance('request', Illuminate\Http\Request::create('/'));
+    }
 
     if (!$app->bound('config') && class_exists('Illuminate\Config\Repository')) {
         $app->singleton('config', fn () => new Illuminate\Config\Repository([
@@ -59,6 +75,24 @@ if (class_exists('Illuminate\Container\Container') && class_exists('Illuminate\S
             'sms'        => ['guard' => ['enabled' => false]],
         ]));
     }
+
+    // Load dependency defaults normally merged by Laravel service providers.
+    // Class constants here do not eagerly load models that test fixtures alias.
+    $configuration = $app->make('config');
+    $configuration->set('auth', array_replace_recursive([
+        'defaults' => ['guard' => 'sanctum'],
+        'guards'   => [
+            'sanctum' => ['driver' => 'sanctum', 'provider' => 'users'],
+            'web'     => ['driver' => 'session', 'provider' => 'users'],
+        ],
+        'providers' => ['users' => ['driver' => 'eloquent', 'model' => Fleetbase\Models\User::class]],
+    ], $configuration->get('auth', [])));
+    $corePath = Composer\InstalledVersions::getInstallPath('fleetbase/core-api');
+    $configuration->set('permission', array_replace_recursive(
+        require $corePath . '/config/permission.php',
+        $configuration->get('permission', [])
+    ));
+    (new Cknow\Money\MoneyServiceProvider($app))->register();
 
     if (!$app->bound(Illuminate\Contracts\Routing\ResponseFactory::class)) {
         $responseFactory = new class {
@@ -150,6 +184,10 @@ if (class_exists('Illuminate\Container\Container') && class_exists('Illuminate\S
                 }
             };
         });
+    }
+
+    if (!$app->bound('db.schema')) {
+        $app->bind('db.schema', fn ($app) => $app->make('db')->connection()->getSchemaBuilder());
     }
 
     if (!$app->bound('http') && class_exists('Illuminate\Http\Client\Factory')) {
@@ -300,6 +338,11 @@ if (!class_exists('Illuminate\Validation\ValidationException')) {
 }
 
 if (class_exists('Illuminate\Http\Request') && method_exists('Illuminate\Http\Request', 'macro')) {
+    // Unit tests do not boot Core's providers; use its real request expansion.
+    if (!Illuminate\Http\Request::hasMacro('or')) {
+        Illuminate\Http\Request::macro('or', (new Fleetbase\Expansions\Request())->or());
+    }
+
     if (!method_exists('Illuminate\Http\Request', 'array')) {
         Illuminate\Http\Request::macro('array', function (string $key, array $default = []): array {
             $value = $this->input($key, $default);
