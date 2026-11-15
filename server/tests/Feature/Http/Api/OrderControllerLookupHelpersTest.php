@@ -177,7 +177,7 @@ test('order comments endpoint reports missing orders and load failures', functio
 
     // Any other failure while loading comments reports the generic error
     $failing = new class extends OrderController {
-        protected function findOrder(string $id, array $with = [], array $withCount = []): Order
+        protected function findOrder(string $id, array $with = [], array $withCount = [], bool $lockForUpdate = false): Order
         {
             throw new RuntimeException('comments backend unavailable');
         }

@@ -47,7 +47,7 @@ class FleetOpsApiOrderCrudControllerProbe extends OrderController
     public ?FleetOpsApiOrderEditFake $edit       = null;
     public array $editLockedWith                 = [];
 
-    protected function findOrder(string $id, array $with = [], array $withCount = []): Order
+    protected function findOrder(string $id, array $with = [], array $withCount = [], bool $lockForUpdate = false): Order
     {
         if ($this->orderNotFound) {
             throw new ModelNotFoundException();

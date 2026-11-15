@@ -243,7 +243,7 @@ class FleetOpsInternalOrderLifecycleControllerProbe extends OrderController
         return $this->proofEntity;
     }
 
-    protected function proofsForSubject(Order $order, Order|Waypoint|Entity $subject)
+    protected function proofsForSubject(Order $order, Order|Waypoint|Entity|Place $subject)
     {
         $this->proofResults ??= collect();
         $this->proofResults->each(fn (Proof $proof) => $proof->setAttribute('queried_subject_uuid', $subject->uuid));
@@ -353,7 +353,7 @@ class FleetOpsInternalOrderLifecycleControllerProbe extends OrderController
         return $this->order;
     }
 
-    protected function findOrderById(mixed $id, array $with = []): ?Order
+    protected function findOrderById(mixed $id, array $with = [], bool $lockForUpdate = false): ?Order
     {
         $this->order?->setAttribute('lookup_id', $id);
         $this->order?->setAttribute('lookup_with', $with);
