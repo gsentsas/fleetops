@@ -6,8 +6,11 @@ on:
     tags:
       - 'v*'
   pull_request:
-    branches: [ main, 'release/v*', 'dev-v*' ]
+    branches: [ main, 'release/v*', 'dev-v*', 'security/rc1-service-quote-request-tenant-20261111' ]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -16,6 +19,21 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        fetch-depth: 0
+
+    - name: Verify candidate revision and stacked base
+      env:
+        EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -eu
+        test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+        if [ -n "$EXPECTED_BASE_SHA" ]; then
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" HEAD
+        fi
+        git rev-parse HEAD
 
     - name: Setup PHP
       uses: shivammathur/setup-php@v2
@@ -42,7 +60,7 @@ jobs:
       run: composer install --prefer-dist --no-progress
 
     - name: Run Lint
-      run: composer lint
+      run: composer test:lint
 
     - name: Run Tests
       run: composer test:unit
@@ -72,3 +90,4 @@ jobs:
         disable_search: true
         flags: backend
         fail_ci_if_error: false
+
