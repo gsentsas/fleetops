@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Fleetbase\FleetOps\Support\Telematics\WebhookReplayLedger;
+use Fleetbase\Tests\Support\WebhookReceiptDatabase;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Support\Facades\Facade;
 
@@ -22,10 +23,8 @@ function gstFleetReplayFixture(?string $connection = null): WebhookReplayLedger
     $capsule->bootEloquent();
     app()->instance('db', $capsule->getDatabaseManager());
     Facade::clearResolvedInstance('db');
-    app()->instance('db.schema', $capsule->getDatabaseManager()->connection($connection)->getSchemaBuilder());
-    Facade::clearResolvedInstance('db.schema');
-    $migration = require __DIR__ . '/../migrations/2026_11_08_000001_create_telematic_webhook_receipts_table.php';
-    $migration->up();
+    // Register bytewise ascii_bin for SQLite before running the real MySQL migration.
+    WebhookReceiptDatabase::migrate($capsule->getDatabaseManager()->connection($connection));
 
     return new WebhookReplayLedger($connection);
 }

@@ -36,7 +36,10 @@ $iterator = new RecursiveIteratorIterator(
 );
 
 foreach ($iterator as $fileInfo) {
-    if ($fileInfo->isFile() && $fileInfo->getExtension() === 'php') {
+    // Pest suites use *Test.php or the legacy Feature.php entry point.
+    // Support fixtures and Docker-only RC1 proof scripts have separate runners.
+    $name = $fileInfo->getFilename();
+    if ($fileInfo->isFile() && (str_ends_with($name, 'Test.php') || $name === 'Feature.php')) {
         $files[] = $fileInfo->getPathname();
     }
 }
@@ -57,7 +60,7 @@ foreach ($files as $file) {
 
     fwrite(STDOUT, "::group::{$relativeFile}\n");
 
-    $command = array_merge([PHP_BINARY, $runner], $args, [$file]);
+    $command       = array_merge([PHP_BINARY, $runner], $args, [$file]);
     $timeoutBinary = trim((string) shell_exec('command -v timeout'));
     if ($timeoutBinary !== '') {
         $command = array_merge([$timeoutBinary, "{$timeout}s"], $command);

@@ -199,6 +199,20 @@ test('context builder resolves driver origins stops and warnings', function () {
         ->and($context->warnings)->toContain('stale_driver_location');
 });
 
+test('context builder marks future-skewed driver timestamps stale with a nonnegative age', function () {
+    $connection = fleetopsTrackingBoot();
+    $order      = fleetopsTrackingSeedOrder($connection);
+    $connection->table('drivers')
+        ->where('uuid', '44444444-4444-4444-8444-444444444444')
+        ->update(['updated_at' => now()->addHour()]);
+
+    $context = (new TrackingContextBuilder())->build($order, TrackingOptions::fromArray([]));
+
+    expect($context->driverLocationAgeSeconds)->toBeInt()
+        ->toBeGreaterThan(3500)
+        ->and($context->warnings)->toContain('stale_driver_location');
+});
+
 test('context builder falls back to payload origin without a driver', function () {
     $connection = fleetopsTrackingBoot();
     $order      = fleetopsTrackingSeedOrder($connection, false);
