@@ -2,13 +2,12 @@
 
 require_once __DIR__ . '/../../Support/TelemetryTestEnvironment.php';
 
-use Fleetbase\FleetOps\Jobs\ProcessTelematicDelivery;
 use Fleetbase\FleetOps\Models\Device;
 use Fleetbase\FleetOps\Models\DeviceEvent;
 use Fleetbase\FleetOps\Models\Telematic;
-use Fleetbase\FleetOps\Support\Telematics\TelematicProviderRegistry;
-use Fleetbase\FleetOps\Support\Telematics\Providers\SafeeProvider;
 use Fleetbase\FleetOps\Models\Vehicle;
+use Fleetbase\FleetOps\Support\Telematics\Providers\SafeeProvider;
+use Fleetbase\FleetOps\Support\Telematics\TelematicProviderRegistry;
 use Fleetbase\FleetOps\Support\Telematics\TelematicService;
 use Fleetbase\FleetOps\Support\Telematics\Telemetry\Ingestor;
 use Illuminate\Database\ConnectionResolver;
@@ -101,10 +100,10 @@ function safeeDbFixture(): Telematic
 function safeeDbSample(string $time = '2026-09-15T11:59:00Z', float $latitude = 24.0, array $identity = []): array
 {
     return [
-        'id' => 101,
+        'id'     => 101,
         '_safee' => [
-            'vehicle_id' => 101,
-            'identity' => ['id' => 101] + $identity,
+            'vehicle_id'    => 101,
+            'identity'      => ['id' => 101] + $identity,
             'current_state' => ['vehicle' => ['id' => 101], 'date' => $time, 'position' => ['lat' => $latitude, 'lon' => 46.7], 'speed' => 20, 'heading' => 90],
         ],
     ];
@@ -117,13 +116,13 @@ test('safee repeated and reversed polling samples preserve current device and at
     DB::table('vehicles')->insert(['uuid' => 'vehicle-1', 'public_id' => 'vehicle_1', 'company_uuid' => 'company-1', 'name' => 'Existing vehicle']);
     DB::table('devices')->where('uuid', 'device-1')->update(['attachable_uuid' => 'vehicle-1', 'attachable_type' => Vehicle::class]);
     $provider = new SafeeProvider();
-    $service = new TelematicService(new TelematicProviderRegistry());
+    $service  = new TelematicService(new TelematicProviderRegistry());
     $ingestor = new Ingestor();
-    $sample = safeeDbSample();
+    $sample   = safeeDbSample();
     $ingestor->ingest($connection, $provider, $sample, $service);
     $duplicate = $ingestor->ingest($connection, $provider, $sample, $service);
     $ingestor->ingest($connection, $provider, safeeDbSample('2026-09-15T11:50:00Z', 12), $service);
-    $device = Device::withoutGlobalScopes()->firstOrFail();
+    $device  = Device::withoutGlobalScopes()->firstOrFail();
     $vehicle = Vehicle::withoutGlobalScopes()->firstOrFail();
     expect($duplicate['duplicate'])->toBeTrue()
         ->and(DeviceEvent::withoutGlobalScopes()->count())->toBe(2)
@@ -140,9 +139,9 @@ test('safee repeated and reversed polling samples preserve current device and at
 
 test('safee timestamps with offsets deduplicate the same UTC position', function () {
     $connection = safeeDbFixture();
-    $service = new TelematicService(new TelematicProviderRegistry());
-    $ingestor = new Ingestor();
-    $provider = new SafeeProvider();
+    $service    = new TelematicService(new TelematicProviderRegistry());
+    $ingestor   = new Ingestor();
+    $provider   = new SafeeProvider();
     $ingestor->ingest($connection, $provider, safeeDbSample(), $service);
     $same = $ingestor->ingest($connection, $provider, safeeDbSample('2026-09-15T14:59:00+03:00'), $service);
     expect($same['duplicate'])->toBeTrue()
@@ -152,30 +151,30 @@ test('safee timestamps with offsets deduplicate the same UTC position', function
 
 test('safee missing or invalid positions cannot erase a valid current fix', function ($replacement) {
     $connection = safeeDbFixture();
-    $service = new TelematicService(new TelematicProviderRegistry());
-    $ingestor = new Ingestor();
-    $provider = new SafeeProvider();
+    $service    = new TelematicService(new TelematicProviderRegistry());
+    $ingestor   = new Ingestor();
+    $provider   = new SafeeProvider();
     $ingestor->ingest($connection, $provider, safeeDbSample(), $service);
-    $invalid = safeeDbSample('2026-09-15T11:59:30Z');
+    $invalid                            = safeeDbSample('2026-09-15T11:59:30Z');
     $invalid['_safee']['current_state'] = $replacement;
-    $result = $ingestor->ingest($connection, $provider, $invalid, $service);
-    $device = Device::withoutGlobalScopes()->firstOrFail();
+    $result                             = $ingestor->ingest($connection, $provider, $invalid, $service);
+    $device                             = Device::withoutGlobalScopes()->firstOrFail();
     expect($result['invalid_position'])->toBeTrue()
         ->and($device->last_position->getLat())->toBe(24.0)
         ->and(data_get($device->meta, 'telemetry.position_at'))->toBe('2026-09-15T11:59:00.000000Z')
         ->and(DeviceEvent::withoutGlobalScopes()->count())->toBe(1);
 })->with([
-    'missing state' => [null],
+    'missing state'       => [null],
     'invalid coordinates' => [['date' => '2026-09-15T11:59:30Z', 'position' => ['lat' => 200, 'lon' => 46.7]]],
-    'missing timestamp' => [['position' => ['lat' => 25, 'lon' => 46.7]]],
+    'missing timestamp'   => [['position' => ['lat' => 25, 'lon' => 46.7]]],
 ]);
 
 test('safee matching unit IDs remain isolated by integration and company', function () {
     $first = safeeDbFixture();
     DB::table('telematics')->insert(['uuid' => 'integration-2', 'public_id' => 'telematic_2', 'company_uuid' => 'company-2', 'provider' => 'safee', 'status' => 'active', 'meta' => '{}']);
     DB::table('devices')->insert(['uuid' => 'device-2', 'public_id' => 'device_2', 'company_uuid' => 'company-2', 'telematic_uuid' => 'integration-2', 'device_id' => '101', 'name' => 'Other tracker', 'status' => 'offline', 'meta' => '{}']);
-    $second = Telematic::withoutGlobalScopes()->where('uuid', 'integration-2')->firstOrFail();
-    $service = new TelematicService(new TelematicProviderRegistry());
+    $second   = Telematic::withoutGlobalScopes()->where('uuid', 'integration-2')->firstOrFail();
+    $service  = new TelematicService(new TelematicProviderRegistry());
     $ingestor = new Ingestor();
     $provider = new SafeeProvider();
     $ingestor->ingest($first, $provider, safeeDbSample(), $service);

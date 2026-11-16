@@ -35,6 +35,16 @@ class FleetOpsCustomerControllerProbe extends CustomerController
     }
 }
 
+class FleetOpsCustomerPayloadContactFake extends Contact
+{
+    public function loadMissing($relations)
+    {
+        // Relations for this serialization contract are supplied explicitly.
+        // No database lookup should occur when the user relation is null.
+        return $this;
+    }
+}
+
 class FleetOpsActivityLogFake extends Activity
 {
     public array $fakeAttributes = [];
@@ -150,7 +160,7 @@ test('internal telematic controller describes activity logs and safe issue messa
 
 test('internal customer controller serializes portal login payloads', function () {
     $controller = new FleetOpsCustomerControllerProbe();
-    $customer   = new Contact();
+    $customer   = new FleetOpsCustomerPayloadContactFake();
     $customer->setRawAttributes([
         'uuid'      => 'customer-uuid',
         'public_id' => 'customer-public',

@@ -37,11 +37,13 @@ use Fleetbase\Models\Setting;
 use Fleetbase\Support\Auth;
 use Fleetbase\Support\TemplateString;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -1503,35 +1505,44 @@ class OrderController extends Controller
      */
     public function setDestination(string $id, string $placeId)
     {
+        // Post-lock permissions must see membership and token revocations
+        // committed while a prior transaction held the parent Order lock.
+        $this->requireFreshProofAuthorizationSnapshot();
         try {
-            $order = $this->findOrder($id, [
-                'payload.pickup',
-                'payload.dropoff',
-                'payload.return',
-                'payload.waypoints',
-                'payload.waypointMarkers.place',
-                'payload.waypointMarkers.trackingNumber.status',
-                'driverAssigned',
-                'vehicleAssigned',
-                'customer',
-                'facilitator',
-            ]);
+            // Serialize stop transitions with photo, signature and QR captures,
+            // which lock the same parent Order row before rechecking the stop.
+            $result = DB::transaction(function () use ($id, $placeId) {
+                $order = $this->findOrder($id, [
+                    'payload.pickup',
+                    'payload.dropoff',
+                    'payload.return',
+                    'payload.waypoints',
+                    'payload.waypointMarkers.place',
+                    'payload.waypointMarkers.trackingNumber.status',
+                    'driverAssigned',
+                    'vehicleAssigned',
+                    'customer',
+                    'facilitator',
+                ], [], true);
+                $this->authorizeLockedProofCapture($order);
+
+                $payload = $order->payload;
+                if (!$payload instanceof Payload || !$this->payloadUsesServiceStopActivity($payload)) {
+                    return response()->apiError('Destination can only be changed for multi-waypoint orders.', 422);
+                }
+                $stop = $this->resolveServiceStopFromKey($payload, $placeId);
+                if (!$stop) {
+                    return response()->apiError('Place resource is not a valid destination.', 422);
+                }
+                $this->setPayloadCurrentServiceStop($payload, $stop);
+
+                return $order;
+            });
         } catch (ModelNotFoundException $exception) {
             return response()->apiError('Order resource not found.', 404);
         }
 
-        // Get the order payload
-        $payload = $order->payload;
-
-        $stop = $this->resolveServiceStopFromKey($payload, $placeId);
-        if (!$stop) {
-            return response()->apiError('Place resource is not a valid destination.', 422);
-        }
-
-        // Persist destination choice
-        $this->setPayloadCurrentServiceStop($payload, $stop);
-
-        return $this->orderResource($order->refresh());
+        return $result instanceof Order ? $this->orderResource($result->refresh()) : $result;
     }
 
     /**
@@ -1603,45 +1614,53 @@ class OrderController extends Controller
      */
     public function captureQrScan(Request $request, string $id, ?string $subjectId = null)
     {
-        $code    = $request->input('code');
-        $data    = $request->input('data', []);
-        $rawData = $request->input('raw_data');
-        $type    = $subjectId ? strtok($subjectId, '_') : null;
-
-        if (!$code) {
+        $code = $request->input('code');
+        if (!is_string($code) || $code === '') {
             return $this->apiError('No QR code data to capture.');
         }
-
-        // Load Order
         try {
-            $order = $this->findOrder($id, ['payload.pickup', 'payload.dropoff', 'payload.return', 'payload.waypoints', 'payload.waypointMarkers.place']);
-        } catch (ModelNotFoundException $e) {
+            $order = $this->findOrder($id);
+        } catch (ModelNotFoundException $exception) {
             return $this->apiError('Order resource not found.', 404);
         }
+        $type = $subjectId ? strtok($subjectId, '_') : null;
+        try {
+            // A pending capture can wait for the Order row lock while access is
+            // revoked in another transaction. REPEATABLE READ would re-check
+            // permissions against a stale snapshot. Limit READ COMMITTED to
+            // this next proof transaction, not the pooled connection's session.
+            $this->requireFreshProofAuthorizationSnapshot();
+            $proof = DB::transaction(function () use ($order, $request, $type, $subjectId, $code) {
+                [$lockedOrder, $subject] = $this->lockProofCaptureSubject($order, $type, $subjectId);
+                if (!TrackingCode::matches($code, $subject)) {
+                    throw new HttpResponseException(response()->json(['error' => 'Unable to validate QR code data.'], 400));
+                }
+                // Current locking read also sees a competing transaction's QR
+                // proof after waiting for the parent order, under MySQL RR.
+                $existing = Proof::where('company_uuid', $lockedOrder->company_uuid)
+                    ->where('order_uuid', $lockedOrder->uuid)->where('subject_uuid', $subject->uuid)
+                    ->where('subject_type', Utils::getModelClassName($subject))
+                    ->where('remarks', 'Verified by QR Code Scan')->lockForUpdate()->first();
 
-        // Resolve subject
-        $subject = $this->resolveSubject($order, $type, $subjectId);
-        if (!$subject) {
-            return $this->apiError('Unable to capture QR code data.');
+                return $existing ?? $this->createProof([
+                    'company_uuid' => $lockedOrder->company_uuid,
+                    'order_uuid'   => $lockedOrder->uuid,
+                    'subject_uuid' => $subject->uuid,
+                    'subject_type' => Utils::getModelClassName($subject),
+                    'remarks'      => 'Verified by QR Code Scan',
+                    'raw_data'     => $request->input('raw_data'),
+                    'data'         => $request->input('data', []),
+                ]);
+            });
+        } catch (HttpResponseException $exception) {
+            return $exception->getResponse();
+        } catch (\Throwable $exception) {
+            Log::warning('Proof QR persistence failed', ['exception_class' => get_class($exception)]);
+
+            return $this->apiError('Unable to store proof of delivery.', 503);
         }
 
-        // validate: the scan must name this subject, in any code format still in circulation
-        if (TrackingCode::matches($code, $subject)) {
-            // create verification proof
-            $proof = $this->createProof([
-                'company_uuid' => session('company'),
-                'order_uuid'   => $order->uuid,
-                'subject_uuid' => $subject->uuid,
-                'subject_type' => Utils::getModelClassName($subject),
-                'remarks'      => 'Verified by QR Code Scan',
-                'raw_data'     => $rawData,
-                'data'         => $data,
-            ]);
-
-            return $this->proofResource($proof);
-        }
-
-        return $this->apiError('Unable to validate QR code data.');
+        return $this->proofResource($proof);
     }
 
     /**
@@ -1662,6 +1681,31 @@ class OrderController extends Controller
             return $this->apiError('No signature data to capture.');
         }
 
+        // Validate actual PNG bytes before any database or storage mutation.
+        if (!is_string($signature)) {
+            return $this->apiError('Invalid signature data.', 422);
+        }
+        $base64Payload = str_starts_with($signature, 'data:image/png;base64,')
+            ? substr($signature, strlen('data:image/png;base64,'))
+            : $signature;
+        if ($base64Payload === '' || strlen($base64Payload) > 4 * (int) ceil((10 * 1024 * 1024) / 3)) {
+            return $this->apiError('Invalid signature data.', 422);
+        }
+        $signatureContents = base64_decode($base64Payload, true);
+        if (!is_string($signatureContents) || strlen($signatureContents) > 10 * 1024 * 1024) {
+            return $this->apiError('Invalid signature data.', 422);
+        }
+        $imageInfo = @getimagesizefromstring($signatureContents);
+        if (!is_array($imageInfo) || ($imageInfo['mime'] ?? null) !== 'image/png'
+            || (new \finfo(FILEINFO_MIME_TYPE))->buffer($signatureContents) !== 'image/png'
+            || ($imageInfo[0] ?? 0) < 1 || ($imageInfo[1] ?? 0) < 1
+            || $imageInfo[0] > 10000 || $imageInfo[1] > 10000
+            || $imageInfo[0] > intdiv(25000000, $imageInfo[1])
+            || !function_exists('imagecreatefromstring')
+            || @imagecreatefromstring($signatureContents) === false) {
+            return $this->apiError('Invalid signature data.', 422);
+        }
+
         // Load Order
         try {
             $order = $this->findOrder($id);
@@ -1675,40 +1719,77 @@ class OrderController extends Controller
             return $this->apiError('Unable to capture signature data.');
         }
 
-        // create proof instance
-        $proof = $this->createProof([
-            'company_uuid' => session('company'),
-            'order_uuid'   => $order->uuid,
-            'subject_uuid' => $subject->uuid,
-            'subject_type' => Utils::getModelClassName($subject),
-            'remarks'      => $remarks,
-            'raw_data'     => $signature,
-            'data'         => $data,
-        ]);
+        // Reject cross-tenant or terminal-order writes before any side effects.
+        $companyUuid = session('company');
+        if (!is_string($companyUuid) || $companyUuid === ''
+            || $order->company_uuid !== $companyUuid) {
+            return $this->apiError('Proof is not authorized for this company.', 403);
+        }
+        if (in_array($order->status, ['completed', 'canceled'], true)) {
+            return $this->apiError('Proof capture is closed for this order.', 409);
+        }
 
-        // set the signature storage path
-        $path = 'uploads/' . session('company') . '/signatures/' . $proof->public_id . '.png';
+        try {
+            $this->assertProofCaptureAllowed($order, $subject);
+        } catch (HttpResponseException $exception) {
+            return $exception->getResponse();
+        }
 
-        // upload signature
-        $this->putStorage($disk, $path, base64_decode(str_replace('data:image/png;base64,', '', $signature)));
+        // Keep proof + file rows atomic. External storage needs compensating
+        // cleanup, as it cannot participate in the database transaction.
+        $storedPaths = [];
+        try {
+            // A pending capture can wait for the Order row lock while access is
+            // revoked in another transaction. REPEATABLE READ would re-check
+            // permissions against a stale snapshot. Limit READ COMMITTED to
+            // this next proof transaction, not the pooled connection's session.
+            $this->requireFreshProofAuthorizationSnapshot();
+            $proof = DB::transaction(function () use (
+                $order, $subject, $remarks, $signature, $signatureContents,
+                $data, $disk, $bucket, $companyUuid, $type, $subjectId, &$storedPaths
+            ) {
+                [$lockedOrder, $subject] = $this->lockProofCaptureSubject($order, $type, $subjectId);
+                $proof                   = $this->createProof([
+                    'company_uuid' => $companyUuid,
+                    'order_uuid'   => $lockedOrder->uuid,
+                    'subject_uuid' => $subject->uuid,
+                    'subject_type' => Utils::getModelClassName($subject),
+                    'remarks'      => $remarks,
+                    'raw_data'     => $signature,
+                    'data'         => $data,
+                ]);
+                $path          = 'uploads/' . $companyUuid . '/signatures/' . $proof->public_id . '.png';
+                $storedPaths[] = $path;
+                $this->putStorage($disk, $path, $signatureContents);
 
-        // create file record for upload
-        $file = $this->createFile([
-            'company_uuid'      => session('company'),
-            'uploader_uuid'     => session('user'),
-            'name'              => basename($path),
-            'original_filename' => basename($path),
-            'extension'         => 'png',
-            'content_type'      => 'image/png',
-            'path'              => $path,
-            'bucket'            => $bucket,
-            'type'              => 'signature',
-            'size'              => Utils::getBase64ImageSize($signature),
-        ])->setKey($proof);
+                $file = $this->createFile([
+                    'company_uuid'      => $companyUuid,
+                    'uploader_uuid'     => session('user'),
+                    'name'              => basename($path),
+                    'original_filename' => basename($path),
+                    'extension'         => 'png',
+                    'content_type'      => 'image/png',
+                    'path'              => $path,
+                    'bucket'            => $bucket,
+                    'disk'              => $disk,
+                    'type'              => 'signature',
+                    'file_size'         => strlen($signatureContents),
+                ])->setKey($proof);
+                $proof->file_uuid = $file->uuid;
+                $proof->save();
 
-        // set file to proof
-        $proof->file_uuid = $file->uuid;
-        $proof->save();
+                return $proof;
+            });
+        } catch (HttpResponseException $exception) {
+            $this->cleanupIncompleteProofFiles($disk, $storedPaths);
+
+            return $exception->getResponse();
+        } catch (\Throwable $exception) {
+            $this->cleanupIncompleteProofFiles($disk, $storedPaths);
+            Log::warning('Proof signature persistence failed', ['exception_class' => get_class($exception)]);
+
+            return $this->apiError('Unable to store proof of delivery.', 503);
+        }
 
         return $this->proofResource($proof);
     }
@@ -1739,16 +1820,13 @@ class OrderController extends Controller
         // Validate incoming payload
         try {
             $request->validate([
-                'photos'   => 'required|array|min:1',
+                'photos'   => 'required|array|min:1|max:10',
                 'photos.*' => [
                     function ($attribute, $value, $fail) {
                         // 1) If it’s a file, ensure it’s an image ≤ 10 MB
                         if ($value instanceof UploadedFile) {
-                            if (!$value->isValid()
-                                || !in_array($value->extension(), ['jpg', 'jpeg', 'png', 'gif'])
-                                || $value->getSize() > 10 * 1024 * 1024
-                            ) {
-                                $fail("{$attribute} must be a valid image file ≤ 10 MB.");
+                            if ($this->inspectIncomingProofImage($value) === null) {
+                                $fail("{$attribute} must contain a valid image of at most 10 MB.");
                             }
 
                             return;
@@ -1756,9 +1834,8 @@ class OrderController extends Controller
 
                         // 2) Otherwise it must be a valid Base64 string
                         if (is_string($value)) {
-                            // strict decode check
-                            if (base64_decode($value, true) === false) {
-                                $fail("{$attribute} is not a valid Base64 string.");
+                            if ($this->inspectIncomingProofImage($value) === null) {
+                                $fail("{$attribute} must contain a valid image of at most 10 MB.");
                             }
 
                             return;
@@ -1781,8 +1858,11 @@ class OrderController extends Controller
         $disk        = $request->input('disk', config('filesystems.default'));
         $bucket      = $request->input(
             "filesystems.disks.{$disk}.bucket",
-            config('filesystems.disks.s3.bucket')
+            config("filesystems.disks.{$disk}.bucket", config('filesystems.disks.s3.bucket'))
         );
+        if (!is_string($bucket)) {
+            $bucket = '';
+        }
 
         // Collect uploads & Base64 strings
         /** @var UploadedFile[] $rawInputs */
@@ -1792,7 +1872,9 @@ class OrderController extends Controller
             $request->input('photos', []),
             function ($value) {
                 // must be a string AND strictly decodable as Base64
-                return is_string($value) && base64_decode($value, true) !== false;
+                // Keep malformed strings in the batch so preflight rejects
+                // the entire request rather than silently dropping an item.
+                return is_string($value);
             }
         );
 
@@ -1803,15 +1885,31 @@ class OrderController extends Controller
         // Normalize into one array
         $incoming = array_merge($rawInputs, $base64Inputs);
 
-        // Defensive only: the validate() above already requires `photos` to be a
-        // non-empty array whose every element is an upload or a decodable base64
-        // string, and each of those survives the filter, so this cannot be empty.
-        // Kept in case those rules are relaxed.
-        // @codeCoverageIgnoreStart
+        // Fail closed even when the request validator is bypassed in a test
+        // harness: no input and a malformed batch are distinct cases.
         if (empty($incoming)) {
             return $this->apiError('No photo data to capture.');
         }
-        // @codeCoverageIgnoreEnd
+        // Multipart requests can expose an uploaded file in both the
+        // validation input bag and the files bag. Count actual uploads once.
+        // JSON-only input still rejects silently filtered non-string values.
+        if (count($incoming) > 10 || (empty($rawInputs)
+            && count($incoming) !== count($request->input('photos', [])))) {
+            return $this->apiError('Photo batch contains invalid inputs.', 422);
+        }
+
+        // Validate the complete batch before creating any database rows or files.
+        $totalImageBytes = 0;
+        foreach ($incoming as $item) {
+            $image = $this->inspectIncomingProofImage($item);
+            if ($image === null) {
+                return $this->apiError('Photo batch contains an invalid image.', 422);
+            }
+            $totalImageBytes += $image['size'];
+            if ($totalImageBytes > 20 * 1024 * 1024) {
+                return $this->apiError('Photo batch must contain at most 20 MB of images.', 422);
+            }
+        }
 
         // Load Order
         try {
@@ -1826,29 +1924,74 @@ class OrderController extends Controller
             return $this->apiError('Unable to capture photo as proof.');
         }
 
-        // 5) Loop through each item, create Proof + File
-        foreach ($incoming as $item) {
-            $proof = $this->createProof([
-                'company_uuid' => session('company'),
-                'order_uuid'   => $order->uuid,
-                'subject_uuid' => $subject->uuid,
-                'subject_type' => Utils::getModelClassName($subject),
-                'remarks'      => $remarks,
-                'raw_data'     => $item instanceof UploadedFile ? null : $item,
-                'data'         => $data,
-            ]);
-
-            $file = $this->storeProofPhoto(
-                proof: $proof,
-                photo: $item,
-                disk: $disk,
-                bucket: $bucket
-            );
-
-            $proof->update(['file_uuid' => $file->uuid]);
+        // Prevent writes to another tenant or to a closed order.
+        $companyUuid = session('company');
+        if (!is_string($companyUuid) || $companyUuid === ''
+            || $order->company_uuid !== $companyUuid) {
+            return $this->apiError('Proof is not authorized for this company.', 403);
+        }
+        if (in_array($order->status, ['completed', 'canceled'], true)) {
+            return $this->apiError('Proof capture is closed for this order.', 409);
         }
 
-        // Return the last Proof resource created
+        try {
+            $this->assertProofCaptureAllowed($order, $subject);
+        } catch (HttpResponseException $exception) {
+            return $exception->getResponse();
+        }
+
+        // Entire batch is a SQL unit of work. Compensate filesystem side
+        // effects if any File/Proof insertion fails before commit.
+        $storedPaths = [];
+        try {
+            // A pending capture can wait for the Order row lock while access is
+            // revoked in another transaction. REPEATABLE READ would re-check
+            // permissions against a stale snapshot. Limit READ COMMITTED to
+            // this next proof transaction, not the pooled connection's session.
+            $this->requireFreshProofAuthorizationSnapshot();
+            $proof = DB::transaction(function () use (
+                $order, $subject, $incoming, $remarks, $data, $disk,
+                $bucket, $companyUuid, $type, $subjectId, &$storedPaths
+            ) {
+                [$lockedOrder, $subject] = $this->lockProofCaptureSubject($order, $type, $subjectId);
+                foreach ($incoming as $item) {
+                    $image = $this->inspectIncomingProofImage($item);
+                    if ($image === null) {
+                        throw new \InvalidArgumentException('Invalid image during persistence.');
+                    }
+                    $proof = $this->createProof([
+                        'company_uuid' => $companyUuid,
+                        'order_uuid'   => $lockedOrder->uuid,
+                        'subject_uuid' => $subject->uuid,
+                        'subject_type' => Utils::getModelClassName($subject),
+                        'remarks'      => $remarks,
+                        'raw_data'     => $item instanceof UploadedFile ? null : $item,
+                        'data'         => $data,
+                    ]);
+                    $storedPaths[] = 'uploads/' . $companyUuid . '/photos/'
+                        . $proof->public_id . '.' . $image['extension'];
+                    $file = $this->storeProofPhoto(
+                        proof: $proof,
+                        photo: $item,
+                        disk: $disk,
+                        bucket: $bucket
+                    );
+                    $proof->update(['file_uuid' => $file->uuid]);
+                }
+
+                return $proof;
+            });
+        } catch (HttpResponseException $exception) {
+            $this->cleanupIncompleteProofFiles($disk, $storedPaths);
+
+            return $exception->getResponse();
+        } catch (\Throwable $exception) {
+            $this->cleanupIncompleteProofFiles($disk, $storedPaths);
+            Log::warning('Proof photo persistence failed', ['exception_class' => get_class($exception)]);
+
+            return $this->apiError('Unable to store proof of delivery.', 503);
+        }
+
         return $this->proofResource($proof);
     }
 
@@ -1863,16 +2006,13 @@ class OrderController extends Controller
      */
     protected function storeProofPhoto(Proof $proof, UploadedFile|string $photo, string $disk, string $bucket): File
     {
-        $isFile      = $photo instanceof UploadedFile;
-        $contents    = $isFile
-            ? file_get_contents($photo->getRealPath())
-            : base64_decode($photo);
-        $extension   = $isFile
-            ? $photo->getClientOriginalExtension()
-            : 'png';
-        $contentType = $isFile
-            ? $photo->getClientMimeType()
-            : 'image/png';
+        $image = $this->inspectIncomingProofImage($photo);
+        if ($image === null) {
+            throw new \InvalidArgumentException('Invalid photo image payload.');
+        }
+        $contents    = $image['contents'];
+        $extension   = $image['extension'];
+        $contentType = $image['content_type'];
 
         $company = session('company');
         $path    = "uploads/{$company}/photos/{$proof->public_id}.{$extension}";
@@ -1888,35 +2028,156 @@ class OrderController extends Controller
             'content_type'      => $contentType,
             'path'              => $path,
             'bucket'            => $bucket,
+            'disk'              => $disk,
             'type'              => 'photo',
-            'size'              => strlen($contents),
+            'file_size'         => strlen($contents),
         ])->setKey($proof);
     }
 
     /**
-     * Resolve the “subject” model based on type and public ID.
-     *
-     * Supported types:
-     *  - null        → the Order itself
-     *  - 'place', 'waypoint' → a Waypoint matching payload_uuid & public_id
-     *  - 'entity'    → an Entity by public_id
-     *  - 'order' or any other → the Order
-     *
-     * @param string|null $type      Type prefix extracted from subjectId
-     * @param string|null $subjectId Full public_id of the subject
-     *
-     * @return Order|Waypoint|Entity|null
+     * The post-lock access check must see revocations committed while waiting
+     * for the parent Order row lock. SET TRANSACTION changes only the next
+     * transaction and keeps the shared database session unchanged afterward.
      */
+    protected function requireFreshProofAuthorizationSnapshot(): void
+    {
+        app(\Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class)->prepareLockedWrite();
+    }
+
+    /** Re-check authorization under an order row lock before creating proofs. */
+    protected function lockProofCaptureSubject(Order $order, ?string $type, ?string $subjectId): array
+    {
+        $locked = $this->findOrder($order->public_id, [
+            'payload.pickup', 'payload.dropoff', 'payload.return',
+            'payload.waypoints', 'payload.waypointMarkers.place',
+            'payload.waypointMarkers.trackingNumber.status',
+        ], [], true);
+        $company = session('company');
+        if (!is_string($company) || $company === ''
+            || $locked->company_uuid !== $company || $locked->uuid !== $order->uuid) {
+            throw new HttpResponseException(new \Illuminate\Http\JsonResponse(['error' => 'Proof is not authorized for this company.'], 403));
+        }
+        $this->authorizeLockedProofCapture($locked);
+        $subject = $this->resolveSubject($locked, $type, $subjectId);
+        if (!$subject) {
+            throw new HttpResponseException(new \Illuminate\Http\JsonResponse(['error' => 'Proof subject is unavailable.'], 409));
+        }
+        $this->assertProofCaptureAllowed($locked, $subject);
+
+        return [$locked, $subject];
+    }
+
+    protected function authorizeLockedProofCapture(Order $order): void
+    {
+        app(\Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class)->authorize($order, request());
+    }
+
+    protected function assertProofCaptureAllowed(Order $order, mixed $subject): void
+    {
+        if (in_array($order->status, ['completed', 'canceled'], true)) {
+            throw new HttpResponseException(new \Illuminate\Http\JsonResponse(['error' => 'Proof capture is closed for this order.'], 409));
+        }
+        $payload = $order->payload;
+        if (!$payload instanceof Payload) {
+            if ($subject instanceof Waypoint || $subject instanceof Place || $subject instanceof Entity) {
+                throw new HttpResponseException(new \Illuminate\Http\JsonResponse(['error' => 'Proof requires an active order payload.'], 409));
+            }
+
+            return;
+        }
+        if (!$this->payloadUsesServiceStopActivity($payload)) {
+            return;
+        }
+        $current   = $this->payloadCurrentServiceStop($payload);
+        $requested = $subject instanceof Waypoint || $subject instanceof Place
+            ? $this->resolveServiceStopFromKey($payload, $subject->uuid) : null;
+        $entityAtCurrentStop = $subject instanceof Entity && $current
+            && $subject->destination_uuid === ($current['place']->uuid ?? null);
+        if (!$current || (!$entityAtCurrentStop
+            && (!$requested || (int) $requested['sequence'] !== (int) $current['sequence']))
+            || $this->serviceStopIsComplete($order, $payload, $current)) {
+            throw new HttpResponseException(new \Illuminate\Http\JsonResponse(['error' => 'Proof must target the active unfinished stop.'], 409));
+        }
+    }
+
+    protected function inspectProofImage(string $contents): ?array
+    {
+        $size = strlen($contents);
+        if ($size === 0 || $size > 10 * 1024 * 1024) {
+            return null;
+        }
+        $info       = @getimagesizefromstring($contents);
+        $mime       = (new \finfo(FILEINFO_MIME_TYPE))->buffer($contents);
+        $extensions = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif'];
+        if (!is_array($info) || ($info['mime'] ?? null) !== $mime
+            || !isset($extensions[$mime])
+            || ($info[0] ?? 0) < 1 || ($info[1] ?? 0) < 1
+            || $info[0] > 10000 || $info[1] > 10000
+            || $info[0] > intdiv(25000000, $info[1])
+            || !function_exists('imagecreatefromstring')) {
+            return null;
+        }
+        $bitmap = @imagecreatefromstring($contents);
+        if ($bitmap === false) {
+            return null;
+        }
+        unset($bitmap);
+
+        return [
+            'contents'     => $contents, 'size' => $size,
+            'content_type' => $mime, 'extension' => $extensions[$mime],
+        ];
+    }
+
+    protected function inspectIncomingProofImage(UploadedFile|string $photo): ?array
+    {
+        if ($photo instanceof UploadedFile) {
+            $path = $photo->getRealPath();
+            if (!$photo->isValid() || $photo->getSize() > 10 * 1024 * 1024
+                || !is_string($path) || !is_file($path)) {
+                return null;
+            }
+            $contents = file_get_contents($path);
+        } else {
+            if ($photo === '' || strlen($photo) > 4 * (int) ceil((10 * 1024 * 1024) / 3)) {
+                return null;
+            }
+            $contents = base64_decode($photo, true);
+        }
+
+        return is_string($contents) ? $this->inspectProofImage($contents) : null;
+    }
+
+    protected function cleanupIncompleteProofFiles(string $disk, array $storedPaths): void
+    {
+        foreach (array_reverse($storedPaths) as $path) {
+            try {
+                Storage::disk($disk)->delete($path);
+            } catch (\Throwable $exception) {
+                Log::error('Proof file cleanup failed', [
+                    'exception_class' => get_class($exception),
+                    'storage_disk'    => $disk,
+                ]);
+            }
+        }
+    }
+
     protected function resolveSubject(Order $order, ?string $type, ?string $subjectId)
     {
-        if (!$type) {
+        if ($subjectId === null) {
             return $order;
+        }
+
+        // Never map an invalid explicit subject to the order itself.
+        if ($subjectId === '' || !$type || !$order->company_uuid || !$order->payload_uuid) {
+            return null;
         }
 
         if (in_array($type, ['place', 'waypoint'], true)) {
             $stop = $this->resolveServiceStopFromKey($order->payload, $subjectId);
             if ($stop) {
-                return ($stop['waypoint'] ?? null) instanceof Waypoint ? $stop['waypoint'] : ($stop['place'] ?? $order);
+                return ($stop['waypoint'] ?? null) instanceof Waypoint
+                    ? $stop['waypoint'] : ($stop['place'] ?? null);
             }
         }
 
@@ -1925,15 +2186,15 @@ class OrderController extends Controller
                 ->where('payload_uuid', $order->payload_uuid)
                 ->where(fn ($q) => $q
                     ->whereHas('place', fn ($q) => $q->where('public_id', $subjectId))
-                    ->orWhere('public_id', $subjectId)
-                )
+                    ->orWhere('public_id', $subjectId))
                 ->first(),
-
             'entity' => Entity::withoutGlobalScopes()
+                ->where('company_uuid', $order->company_uuid)
+                ->where('payload_uuid', $order->payload_uuid)
                 ->where('public_id', $subjectId)
                 ->first(),
-
-            default => $order,
+            'order' => in_array($subjectId, [$order->public_id, $order->uuid], true) ? $order : null,
+            default => null,
         };
     }
 
@@ -2034,9 +2295,22 @@ class OrderController extends Controller
         return $this->apiError('An error occured trying to get order comments.', 404);
     }
 
-    protected function findOrder(string $id, array $with = [], array $withCount = []): Order
-    {
-        return Order::findRecordOrFail($id, $with, $withCount);
+    protected function findOrder(
+        string $id,
+        array $with = [],
+        array $columns = [],
+        bool $lockForUpdate = false,
+    ): Order {
+        // The fourth argument to findRecordOrFail is a query callback, not
+        // a boolean. It must apply the SQL row lock before first().
+        return Order::findRecordOrFail(
+            $id,
+            $with,
+            $columns,
+            $lockForUpdate ? static function ($query): void {
+                $query->lockForUpdate();
+            } : null
+        );
     }
 
     protected function resolveOrderConfig(array $input): ?OrderConfig

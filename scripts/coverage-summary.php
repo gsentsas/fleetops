@@ -154,7 +154,10 @@ foreach (array_slice($files, 0, 20) as $file) {
     }
 }
 
-if ($failUnder !== null && coveragePercent($coveredStatements, $statements) < $failUnder) {
-    fwrite(STDERR, sprintf("\nCoverage %.2f%% is below the required %.2f%% line threshold.\n", coveragePercent($coveredStatements, $statements), $failUnder));
+// Gate on the unrounded ratio. Displaying 100.00% is not proof that
+// every statement is covered (e.g. 45459/45460 rounds to 100.00%).
+$exactLineCoverage = $statements > 0 ? ($coveredStatements / $statements) * 100 : 0.0;
+if ($failUnder !== null && $exactLineCoverage < $failUnder) {
+    fwrite(STDERR, sprintf("\nCoverage %.4f%% (%d/%d statements) is below the required %.2f%% line threshold.\n", $exactLineCoverage, $coveredStatements, $statements, $failUnder));
     exit(1);
 }

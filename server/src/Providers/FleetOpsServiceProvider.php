@@ -140,6 +140,13 @@ class FleetOpsServiceProvider extends CoreServiceProvider
      */
     public function boot()
     {
+        // Both API surfaces use the same delivery permission gate. File and
+        // Order scopes evaluate the current HTTP identity, never a boot-time user.
+        $router = $this->app['router'];
+        foreach (['fleetbase.api', 'fleetbase.protected'] as $group) {
+            $router->pushMiddlewareToGroup($group, \Fleetbase\FleetOps\Http\Middleware\AuthorizeDeliveryOperations::class);
+        }
+        \Fleetbase\Models\File::addGlobalScope(new \Fleetbase\FleetOps\Scopes\AssignedDriverFileScope());
         $this->registerMorphMap();
         $this->registerObservers();
         $this->registerCommands();

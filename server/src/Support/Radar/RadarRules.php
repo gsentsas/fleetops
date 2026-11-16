@@ -1146,16 +1146,16 @@ class RadarRules
 
     public static function overdueWords(Carbon $due, Carbon $now): string
     {
-        $minutes = $due->diffInMinutes($now);
+        $minutes = (int) $due->diffInMinutes($now);
         if ($minutes < 60) {
             return max(1, $minutes) . 'm overdue';
         }
-        $hours = $due->diffInHours($now);
+        $hours = (int) $due->diffInHours($now);
         if ($hours < 24) {
             return $hours . 'h overdue';
         }
 
-        return $due->diffInDays($now) . 'd overdue';
+        return (int) $due->diffInDays($now) . 'd overdue';
     }
 
     public static function dueInWords(Carbon $due, Carbon $now): string
@@ -1167,7 +1167,7 @@ class RadarRules
             return 'tomorrow';
         }
 
-        $days = $now->copy()->startOfDay()->diffInDays($due->copy()->startOfDay());
+        $days = (int) $now->copy()->startOfDay()->diffInDays($due->copy()->startOfDay());
         if ($days <= self::DUE_SOON_DAYS) {
             return sprintf('in %d day%s', $days, $days === 1 ? '' : 's');
         }
@@ -1180,7 +1180,7 @@ class RadarRules
      */
     public static function agoWords(Carbon $then, Carbon $now): string
     {
-        $minutes = max(0, $then->diffInMinutes($now, false));
+        $minutes = max(0, (int) $then->diffInMinutes($now, false));
         if ($minutes < 60) {
             return max(1, $minutes) . 'm ago';
         }

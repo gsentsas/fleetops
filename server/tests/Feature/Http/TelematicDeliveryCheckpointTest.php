@@ -21,8 +21,8 @@ use Illuminate\Support\Facades\Schema;
 
 class CheckpointTestIngestor extends Ingestor
 {
-    public array $calls = [];
-    public array $fail = [];
+    public array $calls   = [];
+    public array $fail    = [];
     public array $invalid = [];
 
     public function ingest(Telematic $telematic, TelemetryProviderInterface $provider, array $raw, TelematicService $service, ?string $receivedAt = null, string $source = 'poll'): array
@@ -31,7 +31,7 @@ class CheckpointTestIngestor extends Ingestor
         if (in_array($raw['tracker'], $this->fail, true)) {
             throw new RuntimeException('Temporary device failure');
         }
-        $device = new Device();
+        $device       = new Device();
         $device->meta = ['telemetry' => ['source_delay_seconds' => 1]];
 
         return ['device' => $device, 'invalid_position' => in_array($raw['tracker'], $this->invalid, true)];
@@ -91,12 +91,12 @@ function checkpointDeliverySetup(int $count = 12, string $source = 'poll'): arra
         }
     };
     app()->instance(TelematicProviderRegistry::class, $registry);
-    $units = array_map(fn ($i) => ['tracker' => 'unit-' . $i, 'measured' => '2026-09-17T11:59:00Z', 'point' => [46.7, 24.0]], range(1, $count));
+    $units   = array_map(fn ($i) => ['tracker' => 'unit-' . $i, 'measured' => '2026-09-17T11:59:00Z', 'point' => [46.7, 24.0]], range(1, $count));
     $payload = $source === 'webhook' ? ['signals' => $units] : $units;
     DB::table('telematic_deliveries')->insert([
-        'uuid' => 'delivery-checkpoint', 'telematic_uuid' => 'integration-checkpoint', 'source' => $source, 'status' => 'pending',
+        'uuid'         => 'delivery-checkpoint', 'telematic_uuid' => 'integration-checkpoint', 'source' => $source, 'status' => 'pending',
         'payload_hash' => hash('sha256', json_encode($payload)), 'payload' => Crypt::encryptString(json_encode($payload)),
-        'received_at' => now(), 'available_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+        'received_at'  => now(), 'available_at' => now(), 'created_at' => now(), 'updated_at' => now(),
     ]);
 
     return [new ProcessTelematicDelivery('delivery-checkpoint'), new CheckpointTestIngestor(), new TelematicService($registry), $connection];
@@ -128,8 +128,8 @@ test('slow deliveries continue beyond five reservations without replaying applie
 
 test('yield preserves failed items and invalid counts while reaching the untouched tail', function (string $source, int $invalidFailures, string $finalStatus) {
     [$job, $ingestor, $service] = checkpointDeliverySetup(8, $source);
-    $ingestor->fail = ['unit-1'];
-    $ingestor->invalid = ['unit-2'];
+    $ingestor->fail             = ['unit-1'];
+    $ingestor->invalid          = ['unit-2'];
     for ($pass = 0; $pass < 8; $pass++) {
         $GLOBALS['telemetry_test_clock'] = [1000.0, 1041.0];
         $job->handle($ingestor, $service);

@@ -161,19 +161,26 @@ class ServiceQuote extends Model
             return null;
         }
 
+        // Never return an untrusted raw reference as a ServiceQuote. In
+        // particular, a malformed explicit id must be rejected rather than
+        // raising a return-type TypeError inside the calling controller.
+        if (!is_string($serviceQuote)) {
+            return null;
+        }
+
         if (Str::isUuid($serviceQuote)) {
-            $serviceQuote = static::where('uuid', $serviceQuote)
+            return static::where('uuid', $serviceQuote)
                 ->where('company_uuid', $companyUuid)
                 ->first();
         }
 
         if (Utils::isPublicId($serviceQuote)) {
-            $serviceQuote = static::where('public_id', $serviceQuote)
+            return static::where('public_id', $serviceQuote)
                 ->where('company_uuid', $companyUuid)
                 ->first();
         }
 
-        return $serviceQuote;
+        return null;
     }
 
     public function getPluralName(): string

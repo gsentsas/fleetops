@@ -252,6 +252,9 @@ function fleetopsDriverAdoptionBoot(array $validatorErrors): SQLiteConnection
         'model_has_permissions' => ['permission_id', 'model_type', 'model_uuid'],
         'role_has_permissions'  => ['permission_id', 'role_id'],
         'policies'              => ['name', 'guard_name', 'company_uuid'],
+        // Core IAM also queries this pivot when resolving company-user
+        // permissions, even when the fixture grants only direct rights.
+        'model_has_policies'    => ['policy_id', 'model_type', 'model_uuid'],
         'directives'            => ['uuid', 'public_id', 'company_uuid', 'permission_uuid', 'subject_type', 'subject_uuid', 'key', 'rules'],
         'files'                 => ['uuid', 'public_id', 'company_uuid', 'uploader_uuid', 'subject_uuid', 'subject_type', 'name', 'original_filename', 'extension', 'content_type', 'path', 'bucket', 'disk', 'size', 'type', 'meta', '_key'],
         'invites'               => ['uuid', 'public_id', 'company_uuid', 'created_by_uuid', 'subject_uuid', 'subject_type', 'code', 'uri', 'protocol', 'recipients', 'reason', 'expires_at', '_key'],

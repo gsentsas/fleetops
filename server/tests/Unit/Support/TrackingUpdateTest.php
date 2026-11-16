@@ -283,7 +283,7 @@ test('the position comes from the most recently seen of driver and vehicle', fun
         ->and($update->driver()['name'])->toBe('Ana');
 
     // Without a driver, the assigned vehicle alone gives the position.
-    $order = trackingUpdateOrder([], null, trackingUpdateVehicle());
+    $order  = trackingUpdateOrder([], null, trackingUpdateVehicle());
     $update = new TrackingUpdate($order, TrackingScope::forOrder($order), $stops);
     expect($update->driver())->toBeNull()
         ->and($update->location()['latitude'])->toBe(1.3);

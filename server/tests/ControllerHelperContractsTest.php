@@ -816,7 +816,7 @@ test('api order controller resolves service stop sequencing from payload relatio
 
     $stops = $controller->callHelper('payloadServiceStops', $payload);
 
-    $subjectOrder = new Order(['payload_uuid' => 'payload-uuid']);
+    $subjectOrder = new Order(['company_uuid' => 'company-uuid', 'payload_uuid' => 'payload-uuid']);
     $subjectOrder->setRelation('payload', $payload);
 
     expect($stops)->toHaveCount(3)

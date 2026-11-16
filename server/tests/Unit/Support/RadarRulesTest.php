@@ -466,6 +466,17 @@ test('keys parse only for known rules and buckets follow the calendar', function
         ->and(RadarRules::carbon(new DateTimeImmutable('2026-09-15 00:00:00'))->toDateString())->toBe('2026-09-15');
 });
 
+test('radar due and age labels use elapsed whole units across Carbon versions', function () {
+    $now = Carbon::parse('2026-09-15 08:35:00', 'UTC');
+
+    expect(RadarRules::overdueWords(Carbon::parse('2026-09-12 08:00:00', 'UTC'), $now))->toBe('3d overdue')
+        ->and(RadarRules::overdueWords(Carbon::parse('2026-09-13 09:00:00', 'UTC'), $now))->toBe('1d overdue')
+        ->and(RadarRules::overdueWords(Carbon::parse('2026-09-15 03:20:00', 'UTC'), $now))->toBe('5h overdue')
+        ->and(RadarRules::overdueWords(Carbon::parse('2026-09-15 08:34:20', 'UTC'), $now))->toBe('1m overdue')
+        ->and(RadarRules::dueInWords(Carbon::parse('2026-09-17 08:35:00', 'UTC'), $now))->toBe('in 2 days')
+        ->and(RadarRules::agoWords(Carbon::parse('2026-09-15 06:00:00', 'UTC'), $now))->toBe('2h ago');
+});
+
 test('normalizeState turns an ended snooze back into open or acknowledged', function () {
     $now = fleetOpsRadarNow();
 

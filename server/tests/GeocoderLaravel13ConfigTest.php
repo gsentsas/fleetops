@@ -6,6 +6,7 @@ use Geocoder\Provider\GoogleMaps\GoogleMaps;
 use Psr\Http\Client\ClientInterface;
 
 test('published fleet ops geocoder configuration uses the Laravel HTTP PSR-18 adapter', function () {
+    require_once __DIR__ . '/Support/GeocoderEnvironmentFallback.php';
     $config = require dirname(__DIR__) . '/config/geocoder.php';
 
     expect($config)->toBeArray()

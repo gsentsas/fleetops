@@ -202,6 +202,8 @@ test('replay vehicle locations command calculates delay and vehicle channels', f
     $vehicle->setRawAttributes(['uuid' => 'vehicle-uuid'], true);
 
     expect($command->callHelper('calculateReplayDelay', '2026-01-01T10:00:00Z', '2026-01-01T10:00:08Z', 2.0))->toBe([8, 4.0])
+        ->and($command->callHelper('calculateReplayDelay', '2026-01-01T10:00:08Z', '2026-01-01T10:00:00Z', 2.0))->toBe([8, 4.0])
+        ->and($command->callHelper('calculateReplayDelay', '2026-01-01T10:00:00Z', '2026-01-01T10:00:00Z', 2.0))->toBe([0, 0.0])
         ->and($command->callHelper('channelsForVehicle', 'vehicle-public', $vehicle))->toBe([
             'vehicle.vehicle-public',
             'vehicle.vehicle-uuid',

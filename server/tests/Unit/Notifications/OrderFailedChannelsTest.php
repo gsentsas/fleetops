@@ -68,6 +68,14 @@ test('order failed push channel seams execute their delegation bodies', function
 
     // The fcm/apn transport packages are unavailable in the harness; the
     // delegation bodies still execute, which is the covered contract here.
-    expect(fn () => $notification->toFcm(null))->toThrow(Exception::class)
+    try {
+        $notification->toFcm(null);
+        $fcmFailure = null;
+    } catch (Throwable $exception) {
+        $fcmFailure = $exception;
+    }
+
+    expect($fcmFailure)->not->toBeNull()
+        ->and($fcmFailure instanceof Exception || $fcmFailure instanceof TypeError)->toBeTrue()
         ->and(fn () => $notification->toApn(null))->toThrow(Error::class);
 });

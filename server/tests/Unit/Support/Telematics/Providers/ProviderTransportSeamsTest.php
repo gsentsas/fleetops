@@ -129,5 +129,5 @@ test('safee authentication rejects a successful response that carries no token',
     ]);
 
     expect(fn () => $probe->callHelper('authenticate'))
-        ->toThrow(Fleetbase\FleetOps\Exceptions\TelematicProviderException::class, 'Safee authentication did not return an access token.');
+        ->toThrow(TelematicProviderException::class, 'Safee authentication did not return an access token.');
 });

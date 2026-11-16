@@ -1151,6 +1151,16 @@ class FleetOpsScheduledOrderCommandFake extends Order
     }
 }
 
+class FleetOpsAssignDriverRolesCompanyFake extends Company
+{
+    public function loadMissing($relations)
+    {
+        // Company users are explicitly provided to the command contract test.
+        // This fixture must not resolve Core's database connection.
+        return $this;
+    }
+}
+
 class FleetOpsAssignDriverRolesCommandFake extends AssignDriverRoles
 {
     public array $messages = [];
@@ -2361,7 +2371,7 @@ test('dispatch orders command dispatches ready scheduled orders and warns for un
 });
 
 test('assign driver roles command assigns non admin driver users and reports failures', function () {
-    $company = new Company();
+    $company = new FleetOpsAssignDriverRolesCompanyFake();
     $company->setRawAttributes(['uuid' => 'company-uuid', 'name' => 'Acme Logistics'], true);
 
     $driverUser          = new FleetOpsRoleUserCommandFake('driver@example.test');

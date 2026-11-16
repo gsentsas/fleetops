@@ -314,7 +314,28 @@ class Equipment extends Model
 
         $meta             = $this->meta ?? [];
         $depreciationRate = $meta['depreciation_rate'] ?? 0.1; // 10% per year default
-        $yearsOld         = $this->purchased_at->diffInYears(now());
+
+        // Carbon 2 returned whole years, while Carbon 3 returns fractional
+        // calendar years that can exceed an exact anniversary. Compute a
+        // stable annual fraction between actual purchase anniversaries.
+        // Equipment purchase dates are stored as dates, without an hour.
+        // Evaluate at day precision so a midday clock does not accrue
+        // an extra half day on the exact anniversary.
+        $purchaseDate = $this->purchased_at->copy()->startOfDay();
+        $asOf         = now()->startOfDay();
+        $yearsOld     = 0.0;
+        if ($asOf->greaterThan($purchaseDate)) {
+            $wholeYears  = max(0, $asOf->year - $purchaseDate->year);
+            $anniversary = $purchaseDate->copy()->addYearsNoOverflow($wholeYears);
+            if ($anniversary->greaterThan($asOf)) {
+                $wholeYears--;
+                $anniversary = $purchaseDate->copy()->addYearsNoOverflow($wholeYears);
+            }
+            $nextAnniversary = $purchaseDate->copy()->addYearsNoOverflow($wholeYears + 1);
+            $yearSeconds     = $anniversary->diffInSeconds($nextAnniversary, true);
+            $elapsedSeconds  = $anniversary->diffInSeconds($asOf, true);
+            $yearsOld        = $wholeYears + ($elapsedSeconds / $yearSeconds);
+        }
 
         $depreciatedAmount = $this->purchase_price * ($depreciationRate * $yearsOld);
         $currentValue      = $this->purchase_price - $depreciatedAmount;
@@ -534,7 +555,15 @@ class Equipment extends Model
 
         // Estimate based on purchase price with inflation
         if ($this->purchase_price && $this->purchased_at) {
-            $yearsOld      = $this->purchased_at->diffInYears(now());
+            // Replacement inflation accrues on completed purchase
+            // anniversaries, not on Carbon 3's fractional diffInYears().
+            // Equipment purchase dates are stored without a time of day.
+            $purchaseDate = $this->purchased_at->copy()->startOfDay();
+            $asOf         = now()->startOfDay();
+            $yearsOld     = max(0, $asOf->year - $purchaseDate->year);
+            if ($purchaseDate->copy()->addYearsNoOverflow($yearsOld)->greaterThan($asOf)) {
+                $yearsOld = max(0, $yearsOld - 1);
+            }
             $inflationRate = $meta['inflation_rate'] ?? 0.03; // 3% default
 
             return $this->purchase_price * pow(1 + $inflationRate, $yearsOld);

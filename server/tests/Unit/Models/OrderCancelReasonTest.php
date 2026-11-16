@@ -49,6 +49,13 @@ class FleetOpsOrderCancelReasonOrder extends Order
 {
     public array $activities = [];
 
+    public function loadMissing($relations)
+    {
+        // The orderConfig relationship is explicitly seeded in memory for
+        // this cancellation contract. Never hit the database in this fake.
+        return $this;
+    }
+
     public function updateActivity(?Activity $activity = null, $proof = null): Order
     {
         $this->activities[] = $activity;

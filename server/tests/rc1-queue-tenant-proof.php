@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Exact-image RC1 queue tenant proof. Run with isolated SQLite memory and
  * read-only patched FleetOps classes, never against QA or production MySQL.
@@ -16,7 +17,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 config(['database.default' => 'sqlite', 'database.connections.sqlite' => [
-    'driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '',
+    'driver'                  => 'sqlite', 'database' => ':memory:', 'prefix' => '',
     'foreign_key_constraints' => true,
 ]]);
 DB::purge('sqlite');
@@ -39,27 +40,35 @@ DB::connection('sqlite')->table('service_quotes')->insert([
     ['uuid' => 'quote-a', 'company_uuid' => 'company-a'],
     ['uuid' => 'quote-b', 'company_uuid' => 'company-b'],
 ]);
-function check(bool $condition, string $name): void {
-    if (!$condition) { fwrite(STDERR, $name . '=FAIL' . PHP_EOL); exit(2); }
+function check(bool $condition, string $name): void
+{
+    if (!$condition) {
+        fwrite(STDERR, $name . '=FAIL' . PHP_EOL);
+        exit(2);
+    }
     echo $name . '=PASS' . PHP_EOL;
 }
 foreach ([new ApiJob('order-a'), new InternalJob('order-a')] as $old) {
     $denied = false;
-    try { $old->handle(); } catch (RuntimeException $e) {
+    try {
+        $old->handle();
+    } catch (RuntimeException $e) {
         $denied = $e->getMessage() === 'Queued order finalization is missing its tenant.';
     }
     check($denied, 'LEGACY_WITHOUT_TENANT_FAIL_CLOSED');
 }
-$api = new ApiJob('order-a', 'quote-b', false, 'company-a');
+$api      = new ApiJob('order-a', 'quote-b', false, 'company-a');
 $internal = new InternalJob('order-a', 'company-a');
-$lookup = new ReflectionMethod($api, 'findOrder');
+$lookup   = new ReflectionMethod($api, 'findOrder');
 check($lookup->invoke($api)?->uuid === 'order-a', 'API_OWN_ORDER');
 $other = new ApiJob('order-b', null, false, 'company-a');
 check($lookup->invoke($other) === null, 'API_CROSS_TENANT_ORDER_DENIED');
 $lookupQuote = new ReflectionMethod($api, 'findServiceQuote');
 check($lookupQuote->invoke($api) === null, 'CROSS_TENANT_QUOTE_DENIED');
 $rejected = false;
-try { $api->handle(); } catch (RuntimeException $e) {
+try {
+    $api->handle();
+} catch (RuntimeException $e) {
     $rejected = $e->getMessage() === 'Queued service quote was not found for this tenant.';
 }
 check($rejected, 'FOREIGN_QUOTE_JOB_FAILS_CLOSED_BEFORE_SIDE_EFFECTS');

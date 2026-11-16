@@ -762,3 +762,43 @@ test('test telematic connection job records success and marks failures', functio
         ->and($failingTelematic->status)->toBe('error')
         ->and($failingTelematic->saved)->toBeTrue();
 });
+
+test('queued public order rejects a missing tenant-scoped quote before calling order side effects', function () {
+    $order = new FleetOpsFinalizeOrderFake();
+    $order->setRawAttributes(['uuid' => 'order-r235-missing-quote'], true);
+
+    $job               = new FleetOpsFinalizeApiOrderCreationProbe('order-r235-missing-quote', 'quote-deleted', true, 'tenant-a');
+    $job->order        = $order;
+    $job->serviceQuote = null;
+
+    expect(fn () => $job->handle())->toThrow(RuntimeException::class, 'Queued service quote was not found for this tenant.')
+        ->and($order->calls)->toBe([])
+        ->and($job->events)->toBe([]);
+});
+
+test('queued public order rejects a cross-tenant quote before touching the order', function () {
+    $order = new FleetOpsFinalizeOrderFake();
+    $order->setRawAttributes(['uuid' => 'order-r235-cross-quote'], true);
+    $quote = new ServiceQuote();
+    $quote->setRawAttributes(['uuid' => 'quote-from-tenant-b', 'company_uuid' => 'tenant-b'], true);
+
+    $job               = new FleetOpsFinalizeApiOrderCreationProbe('order-r235-cross-quote', 'quote-from-tenant-b', true, 'tenant-a');
+    $job->order        = $order;
+    $job->serviceQuote = $quote;
+
+    expect(fn () => $job->handle())->toThrow(RuntimeException::class, 'Queued service quote company mismatch.')
+        ->and($order->calls)->toBe([])
+        ->and($job->events)->toBe([]);
+});
+
+test('queued order finalizers fail closed when their immutable tenant is absent', function () {
+    $public          = new FleetOpsFinalizeApiOrderCreationProbe('order-a');
+    $public->order   = new FleetOpsFinalizeOrderFake();
+    $internal        = new FleetOpsFinalizeInternalOrderCreationProbe('order-a');
+    $internal->order = new FleetOpsFinalizeOrderFake();
+
+    expect(fn () => $public->handle())->toThrow(RuntimeException::class, 'Queued order finalization is missing its tenant.')
+        ->and(fn () => $internal->handle())->toThrow(RuntimeException::class, 'Queued order finalization is missing its tenant.')
+        ->and($public->order->calls)->toBe([])
+        ->and($internal->order->calls)->toBe([]);
+});

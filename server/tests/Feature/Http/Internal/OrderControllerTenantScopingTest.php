@@ -35,6 +35,16 @@ use Illuminate\Http\Request;
  */
 class FleetOpsInternalOrderTenantScopeProbe extends OrderController
 {
+    // The SQLite tenant-lookup fixture tests scoping, not native MySQL
+    // transaction isolation or HTTP reauthentication.
+    protected function requireFreshDestinationAuthorizationSnapshot(): void
+    {
+    }
+
+    protected function authorizeLockedDestination(Order $order): void
+    {
+    }
+
     public function callHelper(string $method, ...$arguments): mixed
     {
         return $this->{$method}(...$arguments);
@@ -380,7 +390,7 @@ test('schedule ignores a driver from another company', function () {
 test('activity destination and next-activity endpoints refuse another companys order', function () {
     $connection = fleetopsOrderTenantBoot();
     fleetopsOrderTenantSeed($connection);
-    $controller = new OrderController();
+    $controller = new FleetOpsInternalOrderTenantScopeProbe();
 
     $nextActivity = $controller->nextActivity('order_victim1', Request::create('/x', 'GET'));
     expect($nextActivity->getData(true))->toBe(['error' => 'No order found.']);
@@ -407,5 +417,6 @@ test('proofs endpoint refuses another companys order', function () {
 
     $response = (new OrderController())->proofs(Request::create('/x', 'GET'), FLEETOPS_TENANT_VICTIM_ORDER);
 
-    expect($response->getData(true)['error'] ?? '')->toContain('Unable to retrieve proof');
+    expect($response->getStatusCode())->toBe(404)
+        ->and($response->getData(true)['error'])->toBe('Order resource not found.');
 });

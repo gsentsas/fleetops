@@ -89,5 +89,5 @@ test('coverage summary fails when coverage is below the configured threshold', f
     @unlink($fixture);
 
     expect($exitCode)->toBe(1)
-        ->and(implode("\n", $output))->toContain('Coverage 75.00% is below the required 100.00% line threshold.');
+        ->and(implode("\n", $output))->toContain('Coverage 75.0000% (3/4 statements) is below the required 100.00% line threshold.');
 });

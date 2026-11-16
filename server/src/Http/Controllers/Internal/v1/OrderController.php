@@ -76,6 +76,7 @@ class OrderController extends FleetOpsController
         'bulkAssignDriver' => 'assign-driver-for order',
         'dispatchOrder'    => 'dispatch order',
         'scheduleOrder'    => 'schedule order',
+        'capturePhoto'     => 'update order',
     ];
 
     /**
@@ -761,19 +762,23 @@ class OrderController extends FleetOpsController
      *
      * @param array<int, string> $with
      */
-    protected function findOrderById(mixed $id, array $with = []): ?Order
+    protected function findOrderById(mixed $id, array $with = [], bool $lockForUpdate = false): ?Order
     {
         if (!is_string($id) || $id === '') {
             return null;
         }
 
-        /** @var Order|null $order */
-        $order = $this->scopedToCompany(Order::query())
+        $query = $this->scopedToCompany(Order::query())
             ->where(function (Builder $query) use ($id) {
                 $query->where('uuid', $id)->orWhere('public_id', $id);
             })
-            ->with($with)
-            ->first();
+            ->with($with);
+        if ($lockForUpdate) {
+            $query->lockForUpdate();
+        }
+
+        /** @var Order|null $order */
+        $order = $query->first();
 
         return $order;
     }
@@ -1122,34 +1127,49 @@ class OrderController extends FleetOpsController
      */
     public function setDestination(string $id, string $placeId)
     {
-        $order = $this->findOrderById($id, [
-            'payload.pickup',
-            'payload.dropoff',
-            'payload.return',
-            'payload.waypoints',
-            'payload.waypointMarkers.place',
-            'payload.waypointMarkers.trackingNumber.status',
-            'driverAssigned',
-            'vehicleAssigned',
-            'customer',
-            'facilitator',
-        ]);
-        if (!$order) {
-            return response()->error('No order found.');
-        }
+        $this->requireFreshDestinationAuthorizationSnapshot();
+        // Use the same parent Order row lock as native proof captures. An
+        // active stop transition must not race with a stale photo or QR write.
+        $result = DB::transaction(function () use ($id, $placeId) {
+            $order = $this->findOrderById($id, [
+                'payload.pickup',
+                'payload.dropoff',
+                'payload.return',
+                'payload.waypoints',
+                'payload.waypointMarkers.place',
+                'payload.waypointMarkers.trackingNumber.status',
+                'driverAssigned',
+                'vehicleAssigned',
+                'customer',
+                'facilitator',
+            ], true);
+            if (!$order) {
+                return response()->error('No order found.');
+            }
+            $this->authorizeLockedDestination($order);
+            if (!$this->payloadUsesServiceStopActivity($order->payload)) {
+                return response()->error('Destination can only be changed for multi-waypoint orders.', 422);
+            }
+            $stop = $this->resolveServiceStopFromKey($order->payload, $placeId);
+            if (!$stop) {
+                return response()->error('Place resource is not a valid route destination.', 422);
+            }
+            $this->setPayloadCurrentServiceStop($order->payload, $stop);
 
-        if (!$this->payloadUsesServiceStopActivity($order->payload)) {
-            return response()->error('Destination can only be changed for multi-waypoint orders.', 422);
-        }
+            return $order;
+        });
 
-        $stop = $this->resolveServiceStopFromKey($order->payload, $placeId);
-        if (!$stop) {
-            return response()->error('Place resource is not a valid route destination.', 422);
-        }
+        return $result instanceof Order ? new OrderResource($result->refresh()) : $result;
+    }
 
-        $this->setPayloadCurrentServiceStop($order->payload, $stop);
+    protected function requireFreshDestinationAuthorizationSnapshot(): void
+    {
+        app(\Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class)->prepareLockedWrite();
+    }
 
-        return new OrderResource($order->refresh());
+    protected function authorizeLockedDestination(Order $order): void
+    {
+        app(\Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class)->authorize($order, request());
     }
 
     /**
@@ -1157,89 +1177,29 @@ class OrderController extends FleetOpsController
      *
      * @return ProofResource|\Illuminate\Http\Response
      */
+    #[SkipAuthorizationCheck]
     public function capturePhoto(Request $request, string $id, ?string $subjectId = null)
     {
-        $incoming  = $this->collectProofPhotoInputs($request);
-        $metadata  = $request->input('data', []);
-        $metadata  = is_array($metadata) ? $metadata : [];
-        $validator = Validator::make([
-            'photos'  => $incoming,
-            'remarks' => $request->input('remarks'),
-            'data'    => $metadata,
-        ], [
-            'photos'   => 'required|array|min:1',
-            'photos.*' => [
-                function ($attribute, $value, $fail) {
-                    if ($value instanceof UploadedFile) {
-                        $extension = strtolower($value->getClientOriginalExtension() ?: $value->extension());
-                        if (
-                            !$value->isValid()
-                            || !in_array($extension, ['jpg', 'jpeg', 'png', 'gif', 'webp'])
-                            || $value->getSize() > 10 * 1024 * 1024
-                        ) {
-                            $fail("{$attribute} must be a valid image file <= 10 MB.");
-                        }
-
-                        return;
-                    }
-
-                    if ($this->isValidBase64ProofPhoto($value)) {
-                        return;
-                    }
-
-                    $fail("{$attribute} must be an image file or a valid Base64 string.");
-                },
-            ],
-            'remarks'  => 'sometimes|string|max:255',
-            'data'     => 'sometimes|array',
-        ]);
-
-        if ($validator->fails()) {
-            $errorMessage = collect($validator->errors()->all())->first();
-
-            return response()->error($errorMessage, 422);
-        }
-
-        $order = $this->findOrderById($id, ['payload.pickup', 'payload.dropoff', 'payload.return', 'payload.waypoints', 'payload.waypointMarkers.place']);
+        $order = $this->findOrderById($id, ['payload.waypoints', 'payload.waypointMarkers.place']);
         if (!$order) {
-            return response()->error('No order found.');
+            return response()->error('Order resource not found.', 404);
         }
-
         $subject = $this->resolveProofSubject($order, $subjectId);
         if (!$subject) {
             return response()->error('Unable to capture photo as proof.', 422);
         }
-
-        $disk    = $request->input('disk', config('filesystems.default'));
-        $bucket  = $request->input("filesystems.disks.{$disk}.bucket", config('filesystems.disks.s3.bucket'));
-        $remarks = $request->input('remarks', 'Verified by Photo');
-        $data    = $metadata;
-
-        // Unreachable: the validate() above already requires `photos` to be a
-        // non-empty array, so an empty payload is rejected before this point.
-        // Kept as defence in depth against the rules being loosened.
-        // @codeCoverageIgnoreStart
-        if (empty($incoming)) {
-            return response()->error('No photo data to capture.', 422);
-        }
-        // @codeCoverageIgnoreEnd
-
-        foreach ($incoming as $item) {
-            $proof = Proof::create([
-                'company_uuid' => session('company'),
-                'order_uuid'   => $order->uuid,
-                'subject_uuid' => $subject->uuid,
-                'subject_type' => Utils::getModelClassName($subject),
-                'remarks'      => $remarks,
-                'raw_data'     => $item instanceof UploadedFile ? null : $item,
-                'data'         => $data,
-            ]);
-
-            $file = $this->storeProofPhoto($proof, $item, $disk, $bucket);
-            $proof->update(['file_uuid' => $file->uuid]);
+        // Preserve the console's data-URI input format while sharing the
+        // public endpoint's image validation, SQL lock and storage compensation.
+        $photos = $request->input('photos');
+        if (is_array($photos)) {
+            $request->merge(['photos' => array_map(static function ($photo) {
+                return is_string($photo) && preg_match('/^data:image\/(?:png|jpe?g|gif|webp);base64,/', $photo)
+                    ? substr($photo, strpos($photo, ',') + 1) : $photo;
+            }, $photos)]);
         }
 
-        return new ProofResource($proof);
+        return app(\Fleetbase\FleetOps\Http\Controllers\Api\v1\OrderController::class)
+            ->capturePhoto($request, $order->public_id, $subjectId === null ? null : $subject->public_id);
     }
 
     /**
@@ -1866,27 +1826,36 @@ class OrderController extends FleetOpsController
         } catch (ModelNotFoundException $e) {
             return response()->error('Order resource not found.', 404);
         }
+        if (!$order) {
+            return response()->error('Order resource not found.', 404);
+        }
 
-        $subject = $order;
-
-        if ($subjectId) {
-            $type = strtok($subjectId, '_');
-
-            $subject = match ($type) {
-                'place', 'waypoint' => $this->findWaypointProofSubject($order, $subjectId),
-                'entity'            => $this->findEntityProofSubject($subjectId),
-
-                default => $order,
-            };
+        // An explicit unknown subject must never silently become the whole
+        // order: that would expose proofs outside the requested stop.
+        if ($subjectId === null) {
+            $subject = $order;
+        } elseif ($subjectId === '') {
+            return response()->error('Unable to retrieve proof of delivery for subject.', 400);
+        } elseif (in_array($subjectId, [$order->uuid, $order->public_id], true)) {
+            $subject = $order;
+        } else {
+            $subject = $this->resolveProofSubject($order, $subjectId);
+            if (!$subject && $order->company_uuid && $order->payload_uuid) {
+                $subject = Entity::withoutGlobalScopes()
+                    ->where('company_uuid', $order->company_uuid)
+                    ->where('payload_uuid', $order->payload_uuid)
+                    ->where(function ($query) use ($subjectId) {
+                        $query->where('uuid', $subjectId)->orWhere('public_id', $subjectId);
+                    })
+                    ->first();
+            }
         }
 
         if (!$subject) {
-            return response()->error('Unable to retrieve proof of delivery for subject.');
+            return response()->error('Unable to retrieve proof of delivery for subject.', 400);
         }
 
-        $proofs = $this->proofsForSubject($order, $subject);
-
-        return ProofResource::collection($proofs);
+        return ProofResource::collection($this->proofsForSubject($order, $subject));
     }
 
     protected function findOrderForProofs(string $id): ?Order
@@ -1916,7 +1885,7 @@ class OrderController extends FleetOpsController
         return $entity;
     }
 
-    protected function proofsForSubject(Order $order, Order|Waypoint|Entity $subject)
+    protected function proofsForSubject(Order $order, Order|Waypoint|Entity|Place $subject)
     {
         $proofsQuery = Proof::where([
             'company_uuid' => session('company'),

@@ -1,0 +1,70 @@
+name: RC locked dependency audit
+
+on:
+  pull_request:
+    branches: [ 'security/rc1-service-quote-request-tenant-20261111' ]
+    paths:
+      - '.github/workflows/composer-rc-probe.yml'
+      - 'composer.json'
+      - 'composer.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify source and base
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" HEAD
+
+      - name: Setup isolated PHP tooling
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, gd, zip, pdo_mysql, sockets, intl, bcmath, gmp
+          tools: composer:2.11.2
+          coverage: none
+
+      - name: Audit committed lock without installing packages
+        env:
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ github.token }}"}}'
+          COMPOSER_HOME: ${{ runner.temp }}/rc-composer-home
+          COMPOSER_CACHE_DIR: ${{ runner.temp }}/rc-composer-cache
+          COMPOSER_MEMORY_LIMIT: 512M
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/rc-composer-probe"
+          cp composer.json composer.lock "$RUNNER_TEMP/rc-composer-probe/"
+          cd "$RUNNER_TEMP/rc-composer-probe"
+          composer validate
+          php -r '$j=json_decode(file_get_contents("composer.lock"),true,512,JSON_THROW_ON_ERROR); $core=array_values(array_filter($j["packages"],static fn($p)=>$p["name"]==="fleetbase/core-api")); if(count($core)!==1 || $core[0]["source"]["reference"]!=="4235a8661e1b08ff448db86d0eaedb76e3162739") exit(1);'
+          composer audit --locked --format=json > audit.json
+          sha256sum composer.json composer.lock audit.json > evidence.sha256
+
+      - name: Preserve diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc-dependency-probe-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/rc-composer-probe/composer.json
+            ${{ runner.temp }}/rc-composer-probe/composer.lock
+            ${{ runner.temp }}/rc-composer-probe/audit.json
+            ${{ runner.temp }}/rc-composer-probe/evidence.sha256
+          if-no-files-found: error
+          retention-days: 7

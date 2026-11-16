@@ -1,0 +1,41 @@
+name: RC1 Delivery Security Gate
+on:
+  pull_request:
+    branches:
+      - security/rc1-service-quote-request-tenant-20261111
+    paths:
+      - 'server/src/Http/Controllers/Api/v1/OrderController.php'
+      - 'server/src/Http/Controllers/Internal/v1/OrderController.php'
+      - 'server/src/Http/Middleware/AuthorizeDeliveryOperations.php'
+      - 'server/src/Models/Order.php'
+      - 'server/src/Providers/FleetOpsServiceProvider.php'
+      - 'server/src/Scopes/**'
+      - 'server/tests/check-rc1-delivery-boundary.py'
+      - '.github/workflows/rc1-delivery-security-gate.yml'
+  workflow_dispatch:
+jobs:
+  static-delivery-boundary:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate delivery contract invariants
+        run: python3 server/tests/check-rc1-delivery-boundary.py
+      - name: Validate existing RC1 security contracts
+        run: |
+          python3 server/tests/check-rc1-queue-tenant-contract.py
+          python3 server/tests/check-rc1-quote-boundary.py
+      - name: PHP syntax check (seven candidate sources)
+        run: |
+          set -eu
+          for f in \
+            server/src/Http/Controllers/Api/v1/OrderController.php \
+            server/src/Http/Controllers/Internal/v1/OrderController.php \
+            server/src/Http/Middleware/AuthorizeDeliveryOperations.php \
+            server/src/Models/Order.php \
+            server/src/Providers/FleetOpsServiceProvider.php \
+            server/src/Scopes/AssignedDriverFileScope.php \
+            server/src/Scopes/AssignedDriverOrderScope.php; do
+            php -l "$f"
+          done

@@ -56,9 +56,9 @@ final class TrackingUpdate
     private Collection $stops;
 
     /**
-     * @param iterable<TrackingStop>                  $stops     every stop of the order, in route order
-     * @param array<int, array>                       $etas      ETA per stop sequence: seconds, at, distance_m
-     * @param array<string, array<int, array>>        $timelines timeline entries per tracking number uuid
+     * @param iterable<TrackingStop>           $stops     every stop of the order, in route order
+     * @param array<int, array>                $etas      ETA per stop sequence: seconds, at, distance_m
+     * @param array<string, array<int, array>> $timelines timeline entries per tracking number uuid
      */
     public function __construct(
         private Order $order,
@@ -393,8 +393,8 @@ final class TrackingUpdate
             return null;
         }
 
-        $lat = (float) $point->getLat();
-        $lng = (float) $point->getLng();
+        $lat   = (float) $point->getLat();
+        $lng   = (float) $point->getLng();
         $valid = is_finite($lat) && is_finite($lng) && abs($lat) <= 90 && abs($lng) <= 180 && !(abs($lat) < 0.000001 && abs($lng) < 0.000001);
 
         return $valid ? $point : null;

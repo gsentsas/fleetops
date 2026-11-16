@@ -48,11 +48,11 @@ function fleetopsPublicTrackingOrder(array $attributes = [], array $tracker = []
         ],
     ]));
     $order->setRelation('payload', (object) [
-        'uuid'      => 'payload-internal-uuid',
-        'public_id' => 'payload_public',
-        'meta'      => ['secret' => 'value'],
+        'uuid'       => 'payload-internal-uuid',
+        'public_id'  => 'payload_public',
+        'meta'       => ['secret' => 'value'],
         'cod_amount' => '100',
-        'pickup'    => (object) [
+        'pickup'     => (object) [
             'uuid'      => 'pickup-internal-uuid',
             'public_id' => 'place_pickup',
             'name'      => 'Sender House',

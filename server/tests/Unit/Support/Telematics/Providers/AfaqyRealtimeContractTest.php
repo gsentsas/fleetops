@@ -160,11 +160,11 @@ test('successful HTTP responses still reject malformed JSON and provider error e
 });
 
 test('telemetry snapshots retain scalar readings and skip protocol descriptors without values', function () {
-    $unit = afaqyRealtimeUnit();
+    $unit                             = afaqyRealtimeUnit();
     $unit['data']['sensors_last_val'] = [
-        'fuel' => 40,
+        'fuel'        => 40,
         'temperature' => ['name' => 'Temperature', 'value' => 18, 'unit' => 'C'],
-        'descriptor' => ['name' => 'Protocol descriptor', 'value' => ['expression' => 'ADC1']],
+        'descriptor'  => ['name' => 'Protocol descriptor', 'value' => ['expression' => 'ADC1']],
     ];
     $snapshot = (new AfaqyProvider())->normalizeTelemetrySnapshot($unit);
     expect($snapshot['sensors'])->toHaveCount(2);
@@ -179,10 +179,10 @@ test('unit discovery rejects invalid records and contradictory pagination', func
     expect(fn () => $provider->fetchDevices())->toThrow(TelematicProviderException::class, $message);
     Http::assertSentCount(1);
 })->with([
-    'scalar unit' => [['data' => [42]], 'invalid unit'],
-    'incorrect result count' => [['data' => [['_id' => 'unit-1']], 'pagination' => ['resultCount' => 0]], 'inconsistent pagination'],
-    'zero page size' => [['data' => [], 'pagination' => ['limit' => 0]], 'inconsistent pagination'],
-    'negative total' => [['data' => [], 'pagination' => ['allCount' => -1]], 'inconsistent pagination'],
-    'wrong offset' => [['data' => [['_id' => 'unit-1']], 'pagination' => ['offset' => 10]], 'did not advance'],
+    'scalar unit'             => [['data' => [42]], 'invalid unit'],
+    'incorrect result count'  => [['data' => [['_id' => 'unit-1']], 'pagination' => ['resultCount' => 0]], 'inconsistent pagination'],
+    'zero page size'          => [['data' => [], 'pagination' => ['limit' => 0]], 'inconsistent pagination'],
+    'negative total'          => [['data' => [], 'pagination' => ['allCount' => -1]], 'inconsistent pagination'],
+    'wrong offset'            => [['data' => [['_id' => 'unit-1']], 'pagination' => ['offset' => 10]], 'did not advance'],
     'empty page before total' => [['data' => [], 'pagination' => ['allCount' => 10]], 'did not advance'],
 ]);

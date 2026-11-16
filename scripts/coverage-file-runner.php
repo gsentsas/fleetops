@@ -95,7 +95,10 @@ foreach ($targets as $target) {
         );
 
         foreach ($iterator as $fileInfo) {
-            if ($fileInfo->isFile() && $fileInfo->getExtension() === 'php') {
+            // Match the unit runner: include Pest suites, not support fixtures
+            // or Docker-only RC1 proof scripts with separate execution gates.
+            $name = $fileInfo->getFilename();
+            if ($fileInfo->isFile() && (str_ends_with($name, 'Test.php') || $name === 'Feature.php')) {
                 $files[] = $fileInfo->getPathname();
             }
         }

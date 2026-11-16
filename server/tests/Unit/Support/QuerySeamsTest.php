@@ -188,14 +188,19 @@ test('order finalization job seams resolve records and fire the ready event', fu
     $connection->table('service_quotes')->insert(['uuid' => 'sq-final-1', 'company_uuid' => 'company-seam-1']);
 
     $class = Fleetbase\FleetOps\Jobs\FinalizeApiOrderCreation::class;
-    $job   = new $class('order-final-1', 'sq-final-1');
+    $job   = new $class('order-final-1', 'sq-final-1', false, 'company-seam-1');
 
     expect(fleetopsQuerySeamInvoke($job, $class, 'findOrder')?->uuid)->toBe('order-final-1')
         ->and(fleetopsQuerySeamInvoke($job, $class, 'findServiceQuote')?->uuid)->toBe('sq-final-1');
 
     // Jobs without a quote uuid short circuit before querying
-    $quoteless = new $class('order-final-1', null);
+    $quoteless = new $class('order-final-1', null, false, 'company-seam-1');
     expect(fleetopsQuerySeamInvoke($quoteless, $class, 'findServiceQuote'))->toBeNull();
+
+    // Queue workers must fail closed if a job was enqueued without a tenant.
+    $missingTenant = new $class('order-final-1', 'sq-final-1');
+    expect(fn () => fleetopsQuerySeamInvoke($missingTenant, $class, 'findOrder'))
+        ->toThrow(RuntimeException::class, 'missing its tenant');
 });
 
 test('tracking number observer seams generate numbers barcodes and statuses', function () {

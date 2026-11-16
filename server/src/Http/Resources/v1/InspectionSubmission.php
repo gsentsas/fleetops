@@ -106,8 +106,8 @@ class InspectionSubmission extends FleetbaseResource
             ];
 
             if ($internal) {
-                $row['custom_field'] = $value->custom_field_uuid;
-                $row['value_type']   = $value->value_type;
+                $row['custom_field']  = $value->custom_field_uuid;
+                $row['value_type']    = $value->value_type;
                 $row['uuid']          = $value->uuid;
                 $row['category_uuid'] = $field?->category_uuid;
                 $row['order']         = $field?->order === null ? null : (int) $field->order;

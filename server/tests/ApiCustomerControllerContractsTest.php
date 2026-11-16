@@ -1196,3 +1196,20 @@ test('api customer controller refuses the verification bypass for an identity th
 
     config(['fleetops.customers.verification_bypass_code' => null, 'fleetops.customers.review_accounts' => []]);
 });
+
+test('customer order creation rejects an unresolved quote before any order write', function () {
+    $controller               = fleetopsApiCustomerController();
+    $controller->serviceQuote = null;
+
+    $response = $controller->createOrder(new FleetOpsApiCustomerOrderRequest([
+        'service_quote' => 'quote_another_customer_or_tenant',
+        'notes'         => 'Do not create an order without a valid quote',
+    ]));
+
+    expect($response)->toBeInstanceOf(Illuminate\Http\JsonResponse::class)
+        ->and($response->getStatusCode())->toBe(422)
+        ->and(fleetopsApiCustomerJson($response))->toBe([
+            'error' => 'Invalid service quote for this company.',
+        ])
+        ->and($controller->createdOrders)->toBe([]);
+});

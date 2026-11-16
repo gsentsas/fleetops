@@ -29,7 +29,7 @@ namespace Fleetbase\Support {
             return \app($abstract, $parameters);
         }
 
-        return new class() {
+        return new class {
             public function environment($environments = null)
             {
                 $environment = \config('app.env', 'production');
