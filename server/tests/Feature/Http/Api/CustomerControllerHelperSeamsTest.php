@@ -256,12 +256,12 @@ function fleetopsCustomerHelperBoot(): SQLiteConnection
             return '/unit-test-storage/' . ltrim((string) $path, '/');
         }
 
-        public function putFile($path, $file, $options = [])
+        public function putFile($path, $file = null, $options = [])
         {
             return $this->putFileAs($path, $file, basename((string) $path), $options);
         }
 
-        public function putFileAs($path, $file, $name, $options = [])
+        public function putFileAs($path, $file, $name = null, $options = [])
         {
             $target         = rtrim((string) $path, '/') . '/' . ltrim((string) $name, '/');
             $this->writes[] = $target;
