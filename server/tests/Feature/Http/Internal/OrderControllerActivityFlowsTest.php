@@ -34,6 +34,28 @@ if (!function_exists('Fleetbase\FleetOps\Models\dispatch')) {
     eval('namespace Fleetbase\FleetOps\Models; function dispatch($job = null) { \FleetOpsInternalActivityRecorder::$dispatched[] = $job; return new \Fleetbase\TestSupport\PendingDispatch(); }');
 }
 
+// Isolated SQLite lifecycle fixture. Native BFF auth remains a separate gate.
+class R236InternalDestinationLifecycleFixture extends OrderController
+{
+    public int $lockedAuthorizationChecks = 0;
+    public bool $denyAfterLock            = false;
+    public int $lockTransactionDepth      = 0;
+
+    protected function requireFreshDestinationAuthorizationSnapshot(): void
+    {
+        // MySQL isolation is verified in a dedicated transaction test.
+    }
+
+    protected function authorizeLockedDestination(Fleetbase\FleetOps\Models\Order $order): void
+    {
+        $this->lockedAuthorizationChecks++;
+        $this->lockTransactionDepth = Illuminate\Support\Facades\DB::transactionLevel();
+        if ($this->denyAfterLock) {
+            throw new Illuminate\Http\Exceptions\HttpResponseException(new Illuminate\Http\JsonResponse(['error' => 'Post-lock permission revoked.'], 403));
+        }
+    }
+}
+
 class FleetOpsInternalActivityRecorder
 {
     public static array $events     = [];
@@ -246,7 +268,7 @@ test('update activity enforces proof and dispatch preconditions', function () {
 
 test('next activity resolves the flow and destination selection persists', function () {
     $connection = fleetopsInternalActivityBoot();
-    $controller = new OrderController();
+    $controller = new R236InternalDestinationLifecycleFixture();
 
     fleetopsInternalActivitySeedOrder($connection);
     $activities = $controller->nextActivity('order_internal', Request::create('/x', 'GET'));
@@ -506,7 +528,7 @@ test('dispatch order endpoint guards and dispatches assigned orders', function (
 test('set destination rejects single stop orders', function () {
     $connection = fleetopsInternalActivityBoot();
     fleetopsInternalActivitySeedOrder($connection);
-    $controller = new OrderController();
+    $controller = new R236InternalDestinationLifecycleFixture();
 
     $rejected = $controller->setDestination('order_internal', 'place-p');
     expect($rejected->getStatusCode())->toBe(422)
@@ -649,7 +671,7 @@ test('completing activities release the assigned drivers current job', function 
 test('set destination and next activity guard missing orders and configs', function () {
     $connection = fleetopsInternalActivityBoot();
     fleetopsInternalActivitySeedOrder($connection, ['driver_assigned_uuid' => 'driver-1']);
-    $controller = new OrderController();
+    $controller = new R236InternalDestinationLifecycleFixture();
 
     // Unknown orders are refused before any destination work happens
     expect($controller->setDestination('order_missing99', 'place_any')->getData(true)['error'] ?? '')->toBe('No order found.');
@@ -732,4 +754,45 @@ test('orders with a configured lifecycle start their tracking at the initial act
     // An initial activity missing from the flow falls back to the default
     fleetopsInternalActivityUseLifecycle($connection, ['initial' => 'nowhere']);
     expect($order->getInitialTrackingStatus())->toBeNull();
+});
+
+test('internal destination rejects revoked permission after lock without payload mutation', function () {
+    $connection = fleetopsInternalActivityBoot();
+    fleetopsInternalActivitySeedOrder($connection);
+    $connection->table('places')->insert(['uuid' => 'place-w', 'company_uuid' => 'company-1', 'name' => 'Stop']);
+    $connection->table('waypoints')->insert([
+        'uuid'         => 'wp-1', 'company_uuid' => 'company-1',
+        'payload_uuid' => 'payload-1', 'place_uuid' => 'place-w', 'order' => '1',
+    ]);
+    $connection->table('payloads')->where('uuid', 'payload-1')->update(['current_waypoint_uuid' => 'place-p']);
+    $controller                = new R236InternalDestinationLifecycleFixture();
+    $controller->denyAfterLock = true;
+
+    try {
+        $controller->setDestination('order_internal', 'place-d');
+        $status = 200;
+    } catch (Illuminate\Http\Exceptions\HttpResponseException $exception) {
+        $status = $exception->getResponse()->getStatusCode();
+    }
+
+    expect($status)->toBe(403)
+        ->and($controller->lockedAuthorizationChecks)->toBe(1)
+        ->and($controller->lockTransactionDepth)->toBe(1)
+        ->and($connection->table('payloads')->where('uuid', 'payload-1')->value('current_waypoint_uuid'))->toBe('place-p');
+});
+
+test('internal destination permits the authorized locked transition', function () {
+    $connection = fleetopsInternalActivityBoot();
+    fleetopsInternalActivitySeedOrder($connection);
+    $connection->table('places')->insert(['uuid' => 'place-w', 'company_uuid' => 'company-1', 'name' => 'Stop']);
+    $connection->table('waypoints')->insert([
+        'uuid'         => 'wp-1', 'company_uuid' => 'company-1',
+        'payload_uuid' => 'payload-1', 'place_uuid' => 'place-w', 'order' => '1',
+    ]);
+    $controller = new R236InternalDestinationLifecycleFixture();
+    $controller->setDestination('order_internal', 'place-d');
+
+    expect($controller->lockedAuthorizationChecks)->toBe(1)
+        ->and($controller->lockTransactionDepth)->toBe(1)
+        ->and($connection->table('payloads')->value('current_waypoint_uuid'))->toBe('place-d');
 });

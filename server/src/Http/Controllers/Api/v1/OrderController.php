@@ -1505,6 +1505,9 @@ class OrderController extends Controller
      */
     public function setDestination(string $id, string $placeId)
     {
+        // Post-lock permissions must see membership and token revocations
+        // committed while a prior transaction held the parent Order lock.
+        $this->requireFreshProofAuthorizationSnapshot();
         try {
             // Serialize stop transitions with photo, signature and QR captures,
             // which lock the same parent Order row before rechecking the stop.
@@ -1521,6 +1524,7 @@ class OrderController extends Controller
                     'customer',
                     'facilitator',
                 ], [], true);
+                $this->authorizeLockedProofCapture($order);
 
                 $payload = $order->payload;
                 if (!$payload instanceof Payload || !$this->payloadUsesServiceStopActivity($payload)) {
@@ -2037,10 +2041,7 @@ class OrderController extends Controller
      */
     protected function requireFreshProofAuthorizationSnapshot(): void
     {
-        if (DB::transactionLevel() !== 0) {
-            throw new \RuntimeException('Proof capture requires a top-level database transaction.');
-        }
-        DB::statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        app(\Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class)->prepareLockedWrite();
     }
 
     /** Re-check authorization under an order row lock before creating proofs. */

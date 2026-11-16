@@ -184,3 +184,75 @@ test('native proof guard accepts an order with payload but no per-stop activity'
 
     expect(r235ProofLockingError(fn () => $method->invoke($controller, $locked, $locked)))->toBe(200);
 });
+
+test('internal destination default authorization delegates to fresh delivery authorization service', function () {
+    $order   = r235ProofLockingOrder('order-r236', 'tenant-a');
+    $request = Illuminate\Http\Request::create('/internal/v1/orders/order-r236/destination', 'POST');
+    app()->instance('request', $request);
+    $previousService = app()->bound(Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class)
+        ? app(Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class) : null;
+    $authorization = new class extends Fleetbase\FleetOps\Support\DeliveryProofAuthorization {
+        public array $observed = [];
+
+        public function authorize(Order $order, Illuminate\Http\Request $request): void
+        {
+            $this->observed[] = [$order, $request];
+        }
+    };
+
+    try {
+        app()->instance(Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class, $authorization);
+        $method = new ReflectionMethod(
+            Fleetbase\FleetOps\Http\Controllers\Internal\v1\OrderController::class,
+            'authorizeLockedDestination'
+        );
+        $method->invoke(new Fleetbase\FleetOps\Http\Controllers\Internal\v1\OrderController(), $order);
+        expect($authorization->observed)->toBe([[$order, $request]]);
+    } finally {
+        app()->forgetInstance(Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class);
+        if ($previousService !== null) {
+            app()->instance(Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class, $previousService);
+        }
+    }
+});
+
+test('internal destination snapshot uses the same top-level READ COMMITTED boundary as proof capture', function () {
+    $db = new class {
+        public int $depth        = 0;
+        public array $statements = [];
+
+        public function transactionLevel(): int
+        {
+            return $this->depth;
+        }
+
+        public function statement(string $sql): bool
+        {
+            $this->statements[] = $sql;
+
+            return true;
+        }
+    };
+    $prior = Illuminate\Support\Facades\DB::getFacadeRoot();
+
+    try {
+        Illuminate\Support\Facades\DB::swap($db);
+        $method = new ReflectionMethod(
+            Fleetbase\FleetOps\Http\Controllers\Internal\v1\OrderController::class,
+            'requireFreshDestinationAuthorizationSnapshot'
+        );
+        $controller = new Fleetbase\FleetOps\Http\Controllers\Internal\v1\OrderController();
+        $method->invoke($controller);
+        expect($db->statements)->toBe(['SET TRANSACTION ISOLATION LEVEL READ COMMITTED']);
+        $db->depth = 1;
+        expect(fn () => $method->invoke($controller))
+            ->toThrow(RuntimeException::class, 'Proof capture requires a top-level database transaction.')
+            ->and($db->statements)->toHaveCount(1);
+    } finally {
+        if ($prior !== null) {
+            Illuminate\Support\Facades\DB::swap($prior);
+        } else {
+            Illuminate\Support\Facades\DB::clearResolvedInstance('db');
+        }
+    }
+});

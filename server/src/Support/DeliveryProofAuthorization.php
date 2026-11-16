@@ -14,6 +14,7 @@ use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Session\Store;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\PersonalAccessToken;
 use Laravel\Sanctum\Sanctum;
 use Spatie\Permission\PermissionRegistrar;
@@ -21,6 +22,19 @@ use Spatie\Permission\PermissionRegistrar;
 /** Revalidate the caller at the proof operation's serialization point. */
 class DeliveryProofAuthorization
 {
+    /**
+     * Keep post-lock authorization reads fresh under MySQL's default
+     * repeatable-read transactions, without changing the pooled connection's
+     * isolation level for any future transaction.
+     */
+    public function prepareLockedWrite(): void
+    {
+        if (DB::transactionLevel() !== 0) {
+            throw new \RuntimeException('Proof capture requires a top-level database transaction.');
+        }
+        DB::statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+    }
+
     public function authorize(Order $order, Request $request): void
     {
         $original = Auth::getUserFromSession($request);

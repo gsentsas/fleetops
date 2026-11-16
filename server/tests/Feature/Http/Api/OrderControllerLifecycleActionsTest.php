@@ -43,6 +43,29 @@ if (!Request::hasMacro('or')) {
     });
 }
 
+// SQLite lifecycle fixtures cannot execute MySQL SET TRANSACTION. Native
+// authorization is exercised separately by the HTTP integration matrix.
+class R236PublicDestinationLifecycleFixture extends OrderController
+{
+    public int $lockedAuthorizationChecks = 0;
+    public bool $denyAfterLock            = false;
+    public int $lockTransactionDepth      = 0;
+
+    protected function requireFreshProofAuthorizationSnapshot(): void
+    {
+        // Only the SQLite test fixture bypasses MySQL's isolation statement.
+    }
+
+    protected function authorizeLockedProofCapture(Fleetbase\FleetOps\Models\Order $order): void
+    {
+        $this->lockedAuthorizationChecks++;
+        $this->lockTransactionDepth = Illuminate\Support\Facades\DB::transactionLevel();
+        if ($this->denyAfterLock) {
+            throw new Illuminate\Http\Exceptions\HttpResponseException(new JsonResponse(['error' => 'Post-lock permission revoked.'], 403));
+        }
+    }
+}
+
 class FleetOpsOrderLifecycleRecorder
 {
     public static array $events     = [];
@@ -263,7 +286,7 @@ test('complete order guards incomplete waypoints and cancel cancels', function (
 
 test('set destination validates and persists the current service stop', function () {
     $connection = fleetopsOrderLifecycleBoot();
-    $controller = new OrderController();
+    $controller = new R236PublicDestinationLifecycleFixture();
 
     expect($controller->setDestination('order_missing', 'place-d')->getStatusCode())->toBe(404);
 
@@ -290,4 +313,49 @@ test('set destination validates and persists the current service stop', function
     // Valid destination persists onto the payload
     $controller->setDestination('order_lifecycle', 'place-d');
     expect($connection->table('payloads')->value('current_waypoint_uuid'))->toBe('place-d');
+});
+
+test('public destination rejects revoked permission after order lock without payload mutation', function () {
+    $connection = fleetopsOrderLifecycleBoot();
+    fleetopsOrderLifecycleSeedOrder($connection);
+    $connection->table('places')->insert([
+        'uuid' => 'place-w', 'company_uuid' => 'company-1', 'name' => 'Stop',
+    ]);
+    $connection->table('waypoints')->insert([
+        'uuid'         => 'wp-1', 'company_uuid' => 'company-1',
+        'payload_uuid' => 'payload-1', 'place_uuid' => 'place-w', 'order' => '1',
+    ]);
+    $connection->table('payloads')->where('uuid', 'payload-1')
+        ->update(['current_waypoint_uuid' => 'place-p']);
+
+    $controller                = new R236PublicDestinationLifecycleFixture();
+    $controller->denyAfterLock = true;
+
+    try {
+        $controller->setDestination('order_lifecycle', 'place-d');
+        $status = 200;
+    } catch (Illuminate\Http\Exceptions\HttpResponseException $exception) {
+        $status = $exception->getResponse()->getStatusCode();
+    }
+
+    expect($status)->toBe(403)
+        ->and($controller->lockedAuthorizationChecks)->toBe(1)
+        ->and($controller->lockTransactionDepth)->toBe(1)
+        ->and($connection->table('payloads')->where('uuid', 'payload-1')->value('current_waypoint_uuid'))->toBe('place-p');
+});
+
+test('public destination permits the authorized locked transition', function () {
+    $connection = fleetopsOrderLifecycleBoot();
+    fleetopsOrderLifecycleSeedOrder($connection);
+    $connection->table('places')->insert(['uuid' => 'place-w', 'company_uuid' => 'company-1', 'name' => 'Stop']);
+    $connection->table('waypoints')->insert([
+        'uuid'         => 'wp-1', 'company_uuid' => 'company-1',
+        'payload_uuid' => 'payload-1', 'place_uuid' => 'place-w', 'order' => '1',
+    ]);
+    $controller = new R236PublicDestinationLifecycleFixture();
+    $controller->setDestination('order_lifecycle', 'place-d');
+
+    expect($controller->lockedAuthorizationChecks)->toBe(1)
+        ->and($controller->lockTransactionDepth)->toBe(1)
+        ->and($connection->table('payloads')->value('current_waypoint_uuid'))->toBe('place-d');
 });

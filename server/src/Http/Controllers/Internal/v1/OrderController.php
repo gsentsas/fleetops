@@ -1127,6 +1127,7 @@ class OrderController extends FleetOpsController
      */
     public function setDestination(string $id, string $placeId)
     {
+        $this->requireFreshDestinationAuthorizationSnapshot();
         // Use the same parent Order row lock as native proof captures. An
         // active stop transition must not race with a stale photo or QR write.
         $result = DB::transaction(function () use ($id, $placeId) {
@@ -1145,6 +1146,7 @@ class OrderController extends FleetOpsController
             if (!$order) {
                 return response()->error('No order found.');
             }
+            $this->authorizeLockedDestination($order);
             if (!$this->payloadUsesServiceStopActivity($order->payload)) {
                 return response()->error('Destination can only be changed for multi-waypoint orders.', 422);
             }
@@ -1158,6 +1160,16 @@ class OrderController extends FleetOpsController
         });
 
         return $result instanceof Order ? new OrderResource($result->refresh()) : $result;
+    }
+
+    protected function requireFreshDestinationAuthorizationSnapshot(): void
+    {
+        app(\Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class)->prepareLockedWrite();
+    }
+
+    protected function authorizeLockedDestination(Order $order): void
+    {
+        app(\Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class)->authorize($order, request());
     }
 
     /**
