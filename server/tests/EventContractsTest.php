@@ -120,6 +120,16 @@ class FleetOpsGeofenceEventLogFake extends GeofenceEventLog
     }
 }
 
+class FleetOpsGeofenceArrivalPlaceFake extends Place
+{
+    public ?Point $testLocation = null;
+
+    public function getLocationAttribute($value): ?Point
+    {
+        return $this->testLocation;
+    }
+}
+
 class FleetOpsGeofenceArrivalOrderFake extends Order
 {
     public array $calls = [];
@@ -840,8 +850,9 @@ test('geofence entered listener handles arrival branch outcomes', function () {
     ], 'zone', new Point(1.3521, 103.8198));
 
     $payloadTo = function (?Point $location): Payload {
-        $pickup = new Place();
-        $pickup->setRawAttributes(['uuid' => 'pickup-place-uuid', 'location' => $location], true);
+        $pickup               = new FleetOpsGeofenceArrivalPlaceFake();
+        $pickup->testLocation = $location;
+        $pickup->setRawAttributes(['uuid' => 'pickup-place-uuid'], true);
 
         $payload = new Payload();
         $payload->setRawAttributes(['uuid' => 'arrival-payload-uuid'], true);
