@@ -416,6 +416,28 @@ test('equipment replacement estimates and import rows hydrate defaults', functio
         ->and($equipment->purchased_at->toDateString())->toBe('2025-05-01');
 });
 
+test('equipment replacement inflation uses whole calendar anniversaries', function () {
+    Carbon::setTestNow('2026-07-26 12:00:00');
+    try {
+        $equipment = new Equipment([
+            'purchase_price' => 10000,
+            'purchased_at'   => '2024-07-26',
+            'meta'           => ['inflation_rate' => 0.05],
+        ]);
+        expect($equipment->getReplacementCostEstimate())->toBe(11025.0);
+
+        // The day before the second anniversary has only one completed year.
+        Carbon::setTestNow('2026-07-25 23:59:59');
+        expect($equipment->getReplacementCostEstimate())->toBe(10500.0);
+
+        // A future purchase does not increase the replacement estimate.
+        Carbon::setTestNow('2024-07-25 23:59:59');
+        expect($equipment->getReplacementCostEstimate())->toBe(10000.0);
+    } finally {
+        Carbon::setTestNow();
+    }
+});
+
 test('equipable types match maintenance scheduling and warranty imports resolve', function () {
     $connection = app('db')->connection();
     $schema     = $connection->getSchemaBuilder();

@@ -555,7 +555,15 @@ class Equipment extends Model
 
         // Estimate based on purchase price with inflation
         if ($this->purchase_price && $this->purchased_at) {
-            $yearsOld      = $this->purchased_at->diffInYears(now());
+            // Replacement inflation accrues on completed purchase
+            // anniversaries, not on Carbon 3's fractional diffInYears().
+            // Equipment purchase dates are stored without a time of day.
+            $purchaseDate = $this->purchased_at->copy()->startOfDay();
+            $asOf         = now()->startOfDay();
+            $yearsOld     = max(0, $asOf->year - $purchaseDate->year);
+            if ($purchaseDate->copy()->addYearsNoOverflow($yearsOld)->greaterThan($asOf)) {
+                $yearsOld = max(0, $yearsOld - 1);
+            }
             $inflationRate = $meta['inflation_rate'] ?? 0.03; // 3% default
 
             return $this->purchase_price * pow(1 + $inflationRate, $yearsOld);
