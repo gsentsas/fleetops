@@ -256,3 +256,60 @@ test('proof authorization rechecks a driver assignment', function (bool $assigne
     }
     expect(proofAuthorizationStatus($order, $request))->toBe($assigned ? 200 : 404);
 })->with([false, true]);
+
+test('proof authorization refuses an empty active company before any mutation', function () {
+    [$order, $request] = proofAuthorizationRequest();
+    session(['company' => '']);
+
+    expect(proofAuthorizationStatus($order, $request))->toBe(401);
+});
+
+test('proof authorization rejects a company context change during native identity refresh', function () {
+    [$order, $request] = proofAuthorizationRequest();
+    $authorizer        = new class extends DeliveryProofAuthorization {
+        protected function freshIdentity(Request $request): ?User
+        {
+            $fresh = parent::freshIdentity($request);
+            session(['company' => 'tenant-switched-while-waiting']);
+
+            return $fresh;
+        }
+    };
+
+    try {
+        $authorizer->authorize($order, $request);
+        $status = 200;
+    } catch (HttpResponseException $exception) {
+        $status = $exception->getResponse()->getStatusCode();
+    }
+    expect($status)->toBe(403);
+});
+
+test('proof authorization rejects cookie requests with no started session store', function (bool $hasStore) {
+    [$order, , $original] = proofAuthorizationRequest(true);
+    $request              = new Request();
+    $request->setUserResolver(static fn () => $original);
+    if ($hasStore) {
+        $unstarted = new Store('r235-test', new ArraySessionHandler(120));
+        $request->setLaravelSession($unstarted);
+    }
+    app()->instance('request', $request);
+
+    expect(proofAuthorizationStatus($order, $request))->toBe(401);
+})->with([false, true]);
+
+test('proof authorization rejects deleted users from a persisted browser session', function () {
+    [$order, $request] = proofAuthorizationRequest(true);
+    $this->connection->table('users')->where('uuid', PROOF_USER)->delete();
+
+    expect(proofAuthorizationStatus($order, $request))->toBe(401);
+});
+
+test('proof authorization rejects a persisted browser session bound to a different company', function () {
+    [$order, $request] = proofAuthorizationRequest(true);
+    $store             = $request->session();
+    $store->put('company', 'another-tenant');
+    $store->save();
+
+    expect(proofAuthorizationStatus($order, $request))->toBe(401);
+});

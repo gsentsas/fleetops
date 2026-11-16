@@ -44,7 +44,7 @@ if (!function_exists('Fleetbase\\FleetOps\\Http\\Middleware\\response')) {
 }
 
 beforeEach(function () {
-    DeliveryPermissionFixture::$user    = (object) ['status' => 'active'];
+    DeliveryPermissionFixture::$user    = (object) ['uuid' => 'user-a', 'type' => 'user', 'status' => 'active'];
     DeliveryPermissionFixture::$company = 'company-a';
     DeliveryPermissionFixture::$grants  = [];
     DeliveryPermissionFixture::$checked = [];
@@ -132,3 +132,60 @@ test('file upload refuses an unrelated update permission', function () {
     expect($response->status)->toBe(403)
         ->and(DeliveryPermissionFixture::$checked)->toBe(['fleetbase create file']);
 });
+
+function r235DeliveryPermissionDb(): void
+{
+    $connection = new Illuminate\Database\SQLiteConnection(new PDO('sqlite::memory:'));
+    $resolver   = new Illuminate\Database\ConnectionResolver(['mysql' => $connection, 'default' => $connection]);
+    $resolver->setDefaultConnection('mysql');
+    Illuminate\Database\Eloquent\Model::setConnectionResolver($resolver);
+    $connection->getSchemaBuilder()->create('orders', function ($table) {
+        $table->string('uuid')->primary();
+        $table->string('public_id')->nullable();
+        $table->string('internal_id')->nullable();
+        $table->string('company_uuid');
+        $table->softDeletes();
+    });
+    $connection->getSchemaBuilder()->create('files', function ($table) {
+        $table->string('uuid')->primary();
+        $table->string('public_id')->nullable();
+        $table->string('company_uuid');
+        $table->softDeletes();
+    });
+    $connection->table('orders')->insert([
+        ['uuid' => 'order-a', 'public_id' => 'public-a', 'internal_id' => 'internal-a', 'company_uuid' => 'company-a'],
+        ['uuid' => 'order-b', 'public_id' => 'public-b', 'internal_id' => 'internal-b', 'company_uuid' => 'company-b'],
+    ]);
+    $connection->table('files')->insert([
+        ['uuid' => 'file-a', 'public_id' => 'attachment-a', 'company_uuid' => 'company-a'],
+        ['uuid' => 'file-b', 'public_id' => 'attachment-b', 'company_uuid' => 'company-b'],
+    ]);
+}
+
+test('delivery middleware passes unrelated controllers without checking a delivery permission', function () {
+    $request = deliveryPermissionRequest('Unrelated\\Http\\Controller', 'index', 'GET');
+    $result  = (new AuthorizeDeliveryOperations())->handle($request, static fn () => (object) ['status' => 200]);
+
+    expect($result->status)->toBe(200)
+        ->and(DeliveryPermissionFixture::$checked)->toBe([]);
+});
+
+test('delivery middleware scopes direct order record ids to current company', function (string $id, int $status) {
+    r235DeliveryPermissionDb();
+    DeliveryPermissionFixture::$grants = ['fleet-ops view order'];
+    $request                           = deliveryPermissionRequest(Fleetbase\FleetOps\Http\Controllers\Api\v1\OrderController::class, 'findRecord', 'GET');
+    $request->route()->setParameter('id', $id);
+    $result = (new AuthorizeDeliveryOperations())->handle($request, static fn () => (object) ['status' => 200]);
+
+    expect($result->status)->toBe($status);
+})->with([['order-a', 200], ['public-a', 200], ['internal-a', 200], ['order-b', 404], ['public-b', 404], ['internal-b', 404]]);
+
+test('delivery middleware checks the file download query id in the active company', function (string $id, int $status) {
+    r235DeliveryPermissionDb();
+    DeliveryPermissionFixture::$grants = ['fleetbase view file'];
+    $request                           = deliveryPermissionRequest(Fleetbase\Http\Controllers\Api\v1\FileController::class, 'download', 'GET');
+    $request->query->set('file', $id);
+    $result = (new AuthorizeDeliveryOperations())->handle($request, static fn () => (object) ['status' => 200]);
+
+    expect($result->status)->toBe($status);
+})->with([['file-a', 200], ['attachment-a', 200], ['file-b', 404], ['attachment-b', 404], ['missing', 404]]);
