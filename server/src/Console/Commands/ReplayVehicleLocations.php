@@ -259,7 +259,9 @@ class ReplayVehicleLocations extends Command
     {
         $currentTime   = Carbon::parse($createdAt);
         $previousTime  = Carbon::parse($previousTimestamp);
-        $diffInSeconds = $currentTime->diffInSeconds($previousTime);
+        // Carbon 3 can return a signed float, whereas Carbon 2 returned
+        // an absolute whole-second interval. Replay timing must be stable.
+        $diffInSeconds = (int) round($previousTime->diffInSeconds($currentTime, true));
 
         return [$diffInSeconds, $diffInSeconds / $speedMultiplier];
     }
