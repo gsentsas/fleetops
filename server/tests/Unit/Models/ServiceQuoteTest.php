@@ -435,8 +435,8 @@ test('service quote rejects unresolved request values and checkout without compa
     $quote->setRelation('company', null);
 
     expect(FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(fleetopsServiceQuoteUnitRequestWithQuote(null)))->toBeNull()
-        ->and(fn () => FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(fleetopsServiceQuoteUnitRequestWithQuote('not-a-public-id')))
-        ->toThrow(TypeError::class, 'Return value must be of type')
+        ->and(FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(fleetopsServiceQuoteUnitRequestWithQuote('not-a-public-id')))
+        ->toBeNull()
         ->and(FleetOpsServiceQuoteUnitResolvableFake::$lookups)->toBe([])
         ->and(fn () => $quote->createStripeCheckoutSession('/checkout/return'))
         ->toThrow(Exception::class, 'company you attempted to purchase')
@@ -636,4 +636,28 @@ test('service quote replaces active stripe prices and creates embedded checkout 
         Container::setInstance($previousContainer);
         Facade::setFacadeApplication($previousContainer);
     }
+});
+
+test('service quote resolver fails closed for malformed scalar and structured references', function (mixed $reference) {
+    session(['company' => 'company-service-quote']);
+    FleetOpsServiceQuoteUnitResolvableFake::$lookups = [];
+
+    expect(FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(
+        fleetopsServiceQuoteUnitRequestWithQuote($reference)
+    ))->toBeNull()
+        ->and(FleetOpsServiceQuoteUnitResolvableFake::$lookups)->toBe([]);
+})->with([
+    'malformed textual id' => ['quote-not-a-valid-identifier'],
+    'numeric identifier'   => [123],
+    'structured object'    => [(object) ['uuid' => '11111111-1111-4111-8111-111111111111']],
+    'array reference'      => [['uuid' => '11111111-1111-4111-8111-111111111111']],
+]);
+
+test('non-quote public-id-shaped inputs are tenant-scoped and cannot leak raw identifiers', function () {
+    session(['company' => 'company-service-quote']);
+    FleetOpsServiceQuoteUnitResolvableFake::$lookups = [];
+    expect(FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(
+        fleetopsServiceQuoteUnitRequestWithQuote('other_identifier')
+    ))->toBeNull()
+        ->and(FleetOpsServiceQuoteUnitResolvableFake::$lookups)->toBe([['public_id', 'other_identifier']]);
 });

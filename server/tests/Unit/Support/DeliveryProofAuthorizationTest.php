@@ -313,3 +313,67 @@ test('proof authorization rejects a persisted browser session bound to a differe
 
     expect(proofAuthorizationStatus($order, $request))->toBe(401);
 });
+
+function r235ProofAuthorizationWith(DeliveryProofAuthorization $auth, Order $order, Request $request): int
+{
+    try {
+        $auth->authorize($order, $request);
+
+        return 200;
+    } catch (HttpResponseException $exception) {
+        return $exception->getResponse()->getStatusCode();
+    }
+}
+
+test('proof reauthorization does not trust a successful auth signal without a User principal', function () {
+    [$order, $request] = proofAuthorizationRequest();
+
+    $authorization = new class extends DeliveryProofAuthorization {
+        protected function authenticateOnceWithBasic(Request $probe): mixed
+        {
+            // Reproduce an auth middleware reporting success without a principal.
+            $probe->setUserResolver(static fn () => null);
+
+            return true;
+        }
+    };
+
+    expect(r235ProofAuthorizationWith($authorization, $order, $request))->toBe(401);
+});
+
+test('proof reauthorization rejects a token expired between the primary and secondary reads', function () {
+    [$order, $request, , $issued] = proofAuthorizationRequest();
+    $connection                   = $this->connection;
+    $tokenId                      = (int) $issued->accessToken->id;
+
+    $authorization = new class($connection, $tokenId) extends DeliveryProofAuthorization {
+        public function __construct(private SQLiteConnection $connection, private int $tokenId)
+        {
+        }
+
+        protected function authenticateOnceWithBasic(Request $probe): mixed
+        {
+            $user = ProofAuthorizationUserFixture::findOrFail(PROOF_USER);
+            $probe->setUserResolver(static fn () => $user);
+            // Simulate an expiry committed by a separate worker after Core auth
+            // but immediately before the independent Sanctum read.
+            $this->connection->table('personal_access_tokens')->where('id', $this->tokenId)
+                ->update(['expires_at' => now()->subMinute()]);
+
+            return true;
+        }
+    };
+
+    expect(r235ProofAuthorizationWith($authorization, $order, $request))->toBe(401);
+});
+
+test('fresh browser session identity refuses a persisted tenant change without cached credentials', function () {
+    [, $request] = proofAuthorizationRequest(true);
+    $request->session()->put('company', 'foreign-tenant');
+    $request->session()->save();
+
+    $method = new ReflectionMethod(DeliveryProofAuthorization::class, 'freshSessionIdentity');
+    $method->setAccessible(true);
+
+    expect($method->invoke(new DeliveryProofAuthorization(), $request))->toBeNull();
+});

@@ -83,7 +83,7 @@ class DeliveryProofAuthorization
             // and driver scope. A cloned request avoids its cached user resolver.
             $probe = clone $request;
             $probe->setUserResolver(static fn () => null);
-            $result = (new AuthenticateOnceWithBasicAuth())->authenticatedWithBasic($probe);
+            $result = $this->authenticateOnceWithBasic($probe);
             if ($result !== true) {
                 $this->deny(401);
             }
@@ -113,6 +113,12 @@ class DeliveryProofAuthorization
         }
 
         return $this->freshSessionIdentity($request);
+    }
+
+    /** Keep native authentication intact while testing revocation between reads. */
+    protected function authenticateOnceWithBasic(Request $probe): mixed
+    {
+        return (new AuthenticateOnceWithBasicAuth())->authenticatedWithBasic($probe);
     }
 
     protected function freshSessionIdentity(Request $request): ?User

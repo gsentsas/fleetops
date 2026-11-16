@@ -512,3 +512,46 @@ test('create record starts configured lifecycles at their initial activity and n
         ->and((bool) $connection->table('orders')->value('dispatched'))->toBeFalse()
         ->and((bool) $connection->table('orders')->value('adhoc'))->toBeFalse();
 });
+
+test('internal order creation rejects an explicit foreign quote before creating any records', function () {
+    $db       = fleetopsInternalOrderCreateBoot();
+    $response = (new OrderController())->createRecord(Request::create('/int/v1/orders', 'POST', [
+        'order' => [
+            'dispatched'         => false,
+            'service_quote_uuid' => 'quote_missing_or_other_tenant',
+            'payload'            => ['type' => 'transport'],
+        ],
+    ]));
+
+    expect(json_encode($response->getData(true)))->toContain('Invalid service quote for this company.')
+        ->and($db->table('orders')->count())->toBe(0);
+});
+
+test('internal order creation revalidates an added quote before the post-create callback', function () {
+    $db                = fleetopsInternalOrderCreateBoot();
+    $controller        = new OrderController();
+    $controller->model = new class extends Fleetbase\FleetOps\Models\Order {
+        public function createRecordFromRequest($request, ?callable $onBefore = null, ?callable $onAfter = null, array $options = [])
+        {
+            $attributes = $request->input('order');
+            $onBefore($request, $attributes);
+            $request->merge(['order' => array_merge($request->input('order'), [
+                'service_quote_uuid' => 'quote_added_after_preflight',
+            ])]);
+            $draftOrder = new Fleetbase\FleetOps\Models\Order();
+            $onAfter($request, $draftOrder, $attributes);
+
+            throw new RuntimeException('Security callback must have rejected the quote.');
+        }
+    };
+
+    $response = $controller->createRecord(Request::create('/int/v1/orders', 'POST', [
+        'order' => [
+            'dispatched' => false,
+            'payload'    => ['type' => 'transport'],
+        ],
+    ]));
+
+    expect(json_encode($response->getData(true)))->toContain('Invalid service quote for this company.')
+        ->and($db->table('orders')->count())->toBe(0);
+});

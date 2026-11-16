@@ -1636,16 +1636,117 @@ test('public proof capture sets isolation on the next transaction only and rejec
         }
     };
 
-    Illuminate\Support\Facades\DB::swap($database);
-    $method = new ReflectionMethod(OrderController::class, 'requireFreshProofAuthorizationSnapshot');
-    $method->setAccessible(true);
+    $previousDb = Illuminate\Support\Facades\DB::getFacadeRoot();
+    try {
+        Illuminate\Support\Facades\DB::swap($database);
+        $method = new ReflectionMethod(OrderController::class, 'requireFreshProofAuthorizationSnapshot');
+        $method->setAccessible(true);
+        $controller = new OrderController();
+
+        expect(fn () => $method->invoke($controller))
+            ->toThrow(RuntimeException::class, 'Proof capture requires a top-level database transaction.')
+            ->and($database->statements)->toBe([]);
+
+        $database->depth = 0;
+        $method->invoke($controller);
+        expect($database->statements)->toBe(['SET TRANSACTION ISOLATION LEVEL READ COMMITTED']);
+    } finally {
+        if ($previousDb !== null) {
+            Illuminate\Support\Facades\DB::swap($previousDb);
+        } else {
+            Illuminate\Support\Facades\DB::clearResolvedInstance('db');
+        }
+    }
+});
+
+test('public order create and update reject a foreign or missing quote before mutation', function () {
+    $create               = new FleetOpsApiOrderCrudControllerProbe();
+    $create->serviceQuote = null;
+    $request              = new FleetOpsApiOrderCreateRequestFake([
+        'type'          => 'transport',
+        'service_quote' => 'quote_from_another_tenant',
+    ]);
+
+    $created = $create->create($request);
+    expect($created)->toBeInstanceOf(Illuminate\Http\JsonResponse::class)
+        ->and($created->getStatusCode())->toBe(422)
+        ->and($created->getData(true))->toBe(['error' => 'Invalid service quote for this company.'])
+        ->and($create->createdOrders)->toBe([])
+        ->and($create->finalizedOrders)->toBe([]);
+
+    $update               = new FleetOpsApiOrderCrudControllerProbe();
+    $update->order        = new FleetOpsApiOrderCrudFake();
+    $update->serviceQuote = null;
+    $result               = $update->update('order-public', new FleetOpsApiOrderUpdateRequestFake([
+        'service_quote' => 'quote_from_another_tenant',
+        'notes'         => 'must never be persisted',
+    ]));
+    expect($result)->toBeInstanceOf(Illuminate\Http\JsonResponse::class)
+        ->and($result->getStatusCode())->toBe(422)
+        ->and($result->getData(true))->toBe(['error' => 'Invalid service quote for this company.'])
+        ->and($update->order->updates)->toBe([]);
+});
+
+test('proof subject resolver refuses empty subjects and allows only matching order identity', function () {
+    $subject = new Order();
+    $subject->setRawAttributes([
+        'uuid'         => 'order-uuid',
+        'public_id'    => 'order_public',
+        'company_uuid' => 'tenant-a',
+        'payload_uuid' => 'payload-uuid',
+    ], true);
     $controller = new OrderController();
+    $method     = new ReflectionMethod(OrderController::class, 'resolveSubject');
+    $method->setAccessible(true);
+    expect($method->invoke($controller, $subject, 'order', ''))->toBeNull()
+        ->and($method->invoke($controller, $subject, 'order', 'order-uuid'))->toBe($subject)
+        ->and($method->invoke($controller, $subject, 'order', 'order_public'))->toBe($subject)
+        ->and($method->invoke($controller, $subject, 'order', 'order_other_tenant'))->toBeNull();
+});
 
-    expect(fn () => $method->invoke($controller))
-        ->toThrow(RuntimeException::class, 'Proof capture requires a top-level database transaction.')
-        ->and($database->statements)->toBe([]);
+test('proof image boundary rejects an empty base64 body and an invalid file upload', function () {
+    $controller = new OrderController();
+    $method     = new ReflectionMethod(OrderController::class, 'inspectIncomingProofImage');
+    $method->setAccessible(true);
 
-    $database->depth = 0;
-    $method->invoke($controller);
-    expect($database->statements)->toBe(['SET TRANSACTION ISOLATION LEVEL READ COMMITTED']);
+    $path = tempnam(sys_get_temp_dir(), 'r235-invalid-proof-');
+    try {
+        file_put_contents($path, 'not a valid uploaded image');
+        $untrusted = new Illuminate\Http\UploadedFile($path, 'invalid.png', 'image/png', null, false);
+        expect($method->invoke($controller, ''))->toBeNull()
+            ->and($method->invoke($controller, $untrusted))->toBeNull();
+    } finally {
+        unlink($path);
+    }
+});
+
+class R235PhotoPayloadChangesAfterPreflightProbe extends FleetOpsApiOrderCrudControllerProbe
+{
+    public int $inspections = 0;
+
+    protected function inspectIncomingProofImage(Illuminate\Http\UploadedFile|string $photo): ?array
+    {
+        $this->inspections++;
+
+        return $this->inspections === 1 ? parent::inspectIncomingProofImage($photo) : null;
+    }
+}
+
+test('photo capture refuses a payload that becomes invalid after preflight before any persistence', function () {
+    session(['company' => 'company-uuid', 'user' => 'user-uuid']);
+    $controller                  = new R235PhotoPayloadChangesAfterPreflightProbe();
+    $controller->order           = new FleetOpsApiOrderCrudFake();
+    $controller->resolvedSubject = (object) ['uuid' => 'subject-r235-race'];
+    $png                         = base64_encode(fleetopsValidTestPng());
+
+    $response = $controller->capturePhoto(new R235ProofPreflightRequest([
+        'photos' => [$png], 'disk' => 'local',
+    ]), 'order-public');
+
+    expect($response)->toBe([
+        'apiError' => 'Unable to store proof of delivery.', 'status' => 503,
+    ])->and($controller->inspections)->toBe(2)
+        ->and($controller->createdProofs)->toBe([])
+        ->and($controller->createdFiles)->toBe([])
+        ->and($controller->storedFiles)->toBe([]);
 });

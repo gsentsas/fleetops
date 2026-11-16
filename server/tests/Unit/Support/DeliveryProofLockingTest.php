@@ -128,3 +128,59 @@ test('proof capture requires an active payload for an explicit waypoint subject'
     expect(r235ProofLockingError(fn () => $probe->lockForTest($order, 'waypoint', 'waypoint-a')))->toBe(409)
         ->and($probe->authorizationChecks)->toBe(['order-a']);
 });
+
+test('native locked proof authorization delegates the actual locked order and request', function () {
+    $locked  = r235ProofLockingOrder();
+    $request = Illuminate\Http\Request::create('/proofs', 'POST');
+    app()->instance('request', $request);
+    $spy = new class extends Fleetbase\FleetOps\Support\DeliveryProofAuthorization {
+        public array $seen = [];
+
+        public function authorize(Order $order, Illuminate\Http\Request $request): void
+        {
+            $this->seen[] = [$order, $request];
+        }
+    };
+    app()->instance(Fleetbase\FleetOps\Support\DeliveryProofAuthorization::class, $spy);
+
+    $method = new ReflectionMethod(OrderController::class, 'authorizeLockedProofCapture');
+    $method->setAccessible(true);
+    $method->invoke(new OrderController(), $locked);
+
+    expect($spy->seen)->toBe([[$locked, $request]]);
+});
+
+test('native proof guard forbids completed and canceled orders before recording proof', function (string $status) {
+    $locked = r235ProofLockingOrder('order-a', 'tenant-a', $status);
+    $method = new ReflectionMethod(OrderController::class, 'assertProofCaptureAllowed');
+    $method->setAccessible(true);
+
+    expect(r235ProofLockingError(fn () => $method->invoke(new OrderController(), $locked, $locked)))->toBe(409);
+})->with(['completed', 'canceled']);
+
+test('native proof guard refuses a waypoint without an active payload', function () {
+    $locked   = r235ProofLockingOrder();
+    $waypoint = new Waypoint();
+    $waypoint->setRawAttributes(['uuid' => 'waypoint-a'], true);
+    $method = new ReflectionMethod(OrderController::class, 'assertProofCaptureAllowed');
+    $method->setAccessible(true);
+
+    expect(r235ProofLockingError(fn () => $method->invoke(new OrderController(), $locked, $waypoint)))->toBe(409);
+});
+
+test('native proof guard accepts an order with payload but no per-stop activity', function () {
+    $locked  = r235ProofLockingOrder();
+    $payload = new Fleetbase\FleetOps\Models\Payload();
+    $payload->setRawAttributes(['uuid' => 'payload-a'], true);
+    $locked->setRelation('payload', $payload);
+    $controller = new class extends OrderController {
+        protected function payloadUsesServiceStopActivity(?Fleetbase\FleetOps\Models\Payload $payload): bool
+        {
+            return false;
+        }
+    };
+    $method = new ReflectionMethod(OrderController::class, 'assertProofCaptureAllowed');
+    $method->setAccessible(true);
+
+    expect(r235ProofLockingError(fn () => $method->invoke($controller, $locked, $locked)))->toBe(200);
+});
