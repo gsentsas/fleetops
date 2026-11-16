@@ -1333,3 +1333,319 @@ test('api order controller cancels with a reason when one is given', function ()
     expect($plain->cancelledForTest)->toBeTrue()
         ->and($plain->cancelReasonForTest)->toBeNull();
 });
+
+test('public signature capture rejects malformed, mismatched and terminal inputs before writing proofs', function () {
+    $controller                  = new FleetOpsApiOrderCrudControllerProbe();
+    $controller->order           = new FleetOpsApiOrderCrudFake();
+    $controller->resolvedSubject = (object) ['uuid' => 'subject-r235'];
+
+    session(['company' => 'company-uuid']);
+    foreach ([
+        ['signature' => ['unexpected' => 'array']],
+        ['signature' => 'data:image/png;base64,'],
+        ['signature' => '%%%not-base64%%%'],
+        ['signature' => base64_encode('not-a-real-image')],
+    ] as $payload) {
+        expect($controller->captureSignature(new Request($payload), 'order-public'))->toBe([
+            'apiError' => 'Invalid signature data.', 'status' => 422,
+        ]);
+    }
+
+    $valid = new Request(['signature' => base64_encode(fleetopsValidTestPng())]);
+    session(['company' => 'other-company']);
+    expect($controller->captureSignature($valid, 'order-public'))->toBe([
+        'apiError' => 'Proof is not authorized for this company.', 'status' => 403,
+    ]);
+
+    session(['company' => 'company-uuid']);
+    $controller->order->status = 'completed';
+    expect($controller->captureSignature($valid, 'order-public'))->toBe([
+        'apiError' => 'Proof capture is closed for this order.', 'status' => 409,
+    ]);
+
+    expect($controller->createdProofs)->toBe([])
+        ->and($controller->createdFiles)->toBe([])
+        ->and($controller->storedFiles)->toBe([]);
+});
+
+test('public proof capture rejects missing payloads for explicit waypoint subjects', function () {
+    session(['company' => 'company-uuid']);
+    $controller                        = new FleetOpsApiOrderCrudControllerProbe();
+    $controller->order                 = new FleetOpsApiOrderCrudFake();
+    $controller->resolvedSubject       = new Waypoint();
+    $controller->resolvedSubject->uuid = 'waypoint-r235';
+
+    $response = $controller->captureSignature(new Request([
+        'signature' => base64_encode(fleetopsValidTestPng()),
+    ]), 'order-public', 'waypoint_r235');
+
+    expect(fleetopsProofErrorResponse($response))->toBe([
+        'apiError' => 'Proof requires an active order payload.', 'status' => 409,
+    ]);
+    expect($controller->createdProofs)->toBe([])
+        ->and($controller->createdFiles)->toBe([]);
+});
+
+test('public proof capture fails closed when fresh authorization snapshot cannot be established', function () {
+    session(['company' => 'company-uuid']);
+    $controller = new class extends FleetOpsApiOrderCrudControllerProbe {
+        protected function requireFreshProofAuthorizationSnapshot(): void
+        {
+            throw new RuntimeException('Simulated post-lock auth snapshot failure.');
+        }
+    };
+    $controller->order           = new FleetOpsApiOrderCrudFake();
+    $controller->resolvedSubject = (object) ['uuid' => 'subject-r235'];
+
+    $png = base64_encode(fleetopsValidTestPng());
+    expect($controller->captureQrScan(new Request(['code' => 'valid-looking-code']), 'order-public'))->toBe([
+        'apiError' => 'Unable to store proof of delivery.', 'status' => 503,
+    ])
+        ->and($controller->captureSignature(new Request(['signature' => $png, 'disk' => 'local']), 'order-public'))->toBe([
+            'apiError' => 'Unable to store proof of delivery.', 'status' => 503,
+        ])
+        ->and($controller->capturePhoto(new Request(['photos' => [$png], 'disk' => 'local']), 'order-public'))->toBe([
+            'apiError' => 'Unable to store proof of delivery.', 'status' => 503,
+        ])
+        ->and($controller->createdProofs)->toBe([])
+        ->and($controller->createdFiles)->toBe([])
+        ->and($controller->storedFiles)->toBe([]);
+});
+
+class R235ProofPreflightRequest extends Request
+{
+    public function validate(array $rules, ...$arguments): array
+    {
+        // Skip Laravel validation to test the controller's independent fail-closed checks.
+        return [];
+    }
+}
+
+class R235ProofBatchBudgetProbe extends FleetOpsApiOrderCrudControllerProbe
+{
+    protected function inspectIncomingProofImage(Illuminate\Http\UploadedFile|string $photo): ?array
+    {
+        // The input-validation seam simulates three individually permitted
+        // 9 MB images: the sum must still be rejected before any write.
+        return ['size' => 9 * 1024 * 1024, 'contents' => 'synthetic', 'extension' => 'png', 'content_type' => 'image/png'];
+    }
+}
+
+test('public photo capture independently rejects empty, malformed and oversized batches', function () {
+    $controller = new FleetOpsApiOrderCrudControllerProbe();
+
+    expect($controller->capturePhoto(new R235ProofPreflightRequest(['photos' => []]), 'order-public'))->toBe([
+        'apiError' => 'No photo data to capture.', 'status' => 400,
+    ]);
+    expect($controller->capturePhoto(new R235ProofPreflightRequest([
+        'photos' => array_fill(0, 11, 'not-a-valid-image'),
+    ]), 'order-public'))->toBe([
+        'apiError' => 'Photo batch contains invalid inputs.', 'status' => 422,
+    ]);
+    expect($controller->capturePhoto(new R235ProofPreflightRequest([
+        'photos' => ['image-text', ['unexpected' => 'nonstring']],
+    ]), 'order-public'))->toBe([
+        'apiError' => 'Photo batch contains invalid inputs.', 'status' => 422,
+    ]);
+    expect($controller->capturePhoto(new R235ProofPreflightRequest([
+        'photos' => ['bad-png'],
+    ]), 'order-public'))->toBe([
+        'apiError' => 'Photo batch contains an invalid image.', 'status' => 422,
+    ]);
+
+    $budgetProbe = new R235ProofBatchBudgetProbe();
+    expect($budgetProbe->capturePhoto(new R235ProofPreflightRequest([
+        'photos' => ['synthetic-image-1', 'synthetic-image-2', 'synthetic-image-3'],
+    ]), 'order-public'))->toBe([
+        'apiError' => 'Photo batch must contain at most 20 MB of images.', 'status' => 422,
+    ]);
+    expect($controller->createdProofs)->toBe([])
+        ->and($budgetProbe->createdProofs)->toBe([])
+        ->and($budgetProbe->createdFiles)->toBe([]);
+});
+
+test('public photo capture refuses cross-tenant and terminal order writes before storage', function () {
+    $controller                  = new FleetOpsApiOrderCrudControllerProbe();
+    $controller->order           = new FleetOpsApiOrderCrudFake();
+    $controller->resolvedSubject = (object) ['uuid' => 'subject-r235-photo'];
+    $request                     = new Request([
+        'photos' => [base64_encode(fleetopsValidTestPng())],
+        'disk'   => 'local',
+    ]);
+
+    session(['company' => 'other-company']);
+    expect($controller->capturePhoto($request, 'order-public'))->toBe([
+        'apiError' => 'Proof is not authorized for this company.', 'status' => 403,
+    ]);
+
+    session(['company' => 'company-uuid']);
+    $controller->order->status = 'canceled';
+    expect($controller->capturePhoto($request, 'order-public'))->toBe([
+        'apiError' => 'Proof capture is closed for this order.', 'status' => 409,
+    ]);
+    expect($controller->createdProofs)->toBe([])
+        ->and($controller->storedFiles)->toBe([]);
+});
+
+class R235ProofDiskFailureProbe extends FleetOpsApiOrderCrudControllerProbe
+{
+    public array $cleanups = [];
+
+    protected function putStorage(string $disk, string $path, string $contents): void
+    {
+        throw new RuntimeException('Simulated signature storage failure.');
+    }
+
+    protected function storeProofPhoto(Proof $proof, Illuminate\Http\UploadedFile|string $photo, string $disk, string $bucket): File
+    {
+        throw new RuntimeException('Simulated photo storage failure.');
+    }
+
+    protected function cleanupIncompleteProofFiles(string $disk, array $storedPaths): void
+    {
+        $this->cleanups[] = [$disk, $storedPaths];
+    }
+}
+
+test('public signature and photo capture compensate storage failures without returning proof resources', function () {
+    session(['company' => 'company-uuid']);
+    $controller                  = new R235ProofDiskFailureProbe();
+    $controller->order           = new FleetOpsApiOrderCrudFake();
+    $controller->resolvedSubject = (object) ['uuid' => 'subject-r235-storage'];
+
+    $png = base64_encode(fleetopsValidTestPng());
+    expect($controller->captureSignature(new Request(['signature' => $png, 'disk' => 'local']), 'order-public'))->toBe([
+        'apiError' => 'Unable to store proof of delivery.', 'status' => 503,
+    ])
+        ->and($controller->capturePhoto(new Request(['photos' => [$png], 'disk' => 'local']), 'order-public'))->toBe([
+            'apiError' => 'Unable to store proof of delivery.', 'status' => 503,
+        ])
+        ->and($controller->cleanups)->toBe([
+            ['local', ['uploads/company-uuid/signatures/proof_public.png']],
+            ['local', ['uploads/company-uuid/photos/proof_public.png']],
+        ])
+        ->and($controller->createdFiles)->toBe([]);
+});
+
+class R235ProofPostLockFailureProbe extends FleetOpsApiOrderCrudControllerProbe
+{
+    public array $cleanups = [];
+
+    protected function lockProofCaptureSubject(Order $order, ?string $type, ?string $subjectId): array
+    {
+        throw new Illuminate\Http\Exceptions\HttpResponseException(new Illuminate\Http\JsonResponse(['error' => 'Proof subject changed during lock wait.'], 409));
+    }
+
+    protected function cleanupIncompleteProofFiles(string $disk, array $storedPaths): void
+    {
+        $this->cleanups[] = [$disk, $storedPaths];
+    }
+}
+
+test('public proof capture denies post-lock subject changes with no SQL proof creation', function () {
+    session(['company' => 'company-uuid']);
+    $controller                  = new R235ProofPostLockFailureProbe();
+    $controller->order           = new FleetOpsApiOrderCrudFake();
+    $controller->resolvedSubject = (object) ['uuid' => 'subject-r235-lock'];
+
+    $png = base64_encode(fleetopsValidTestPng());
+    expect(fleetopsProofErrorResponse($controller->captureSignature(new Request([
+        'signature' => $png, 'disk' => 'local',
+    ]), 'order-public')))->toBe([
+        'apiError' => 'Proof subject changed during lock wait.', 'status' => 409,
+    ])
+        ->and(fleetopsProofErrorResponse($controller->capturePhoto(new Request([
+            'photos' => [$png], 'disk' => 'local',
+        ]), 'order-public')))->toBe([
+            'apiError' => 'Proof subject changed during lock wait.', 'status' => 409,
+        ])
+        ->and($controller->createdProofs)->toBe([])
+        ->and($controller->createdFiles)->toBe([])
+        ->and($controller->cleanups)->toBe([['local', []], ['local', []]]);
+});
+
+class R235ProofCleanupProbe extends FleetOpsApiOrderCrudControllerProbe
+{
+    public function cleanPaths(array $paths): void
+    {
+        $this->cleanupIncompleteProofFiles('synthetic-proof-disk', $paths);
+    }
+}
+
+test('proof cleanup deletes files in reverse order and continues after a storage deletion error', function () {
+    $storage = new class {
+        public array $deletes = [];
+
+        public function disk($disk): self
+        {
+            expect($disk)->toBe('synthetic-proof-disk');
+
+            return $this;
+        }
+
+        public function delete(string $path): bool
+        {
+            $this->deletes[] = $path;
+            if ($path === 'middle.png') {
+                throw new RuntimeException('Synthetic storage delete failure.');
+            }
+
+            return true;
+        }
+    };
+    Illuminate\Support\Facades\Storage::swap($storage);
+    (new R235ProofCleanupProbe())->cleanPaths(['first.png', 'middle.png', 'last.png']);
+
+    expect($storage->deletes)->toBe(['last.png', 'middle.png', 'first.png']);
+});
+
+class R235ProofStoreHelperProbe extends FleetOpsApiOrderCrudControllerProbe
+{
+    public function storeImageForTest(Proof $proof, Illuminate\Http\UploadedFile|string $image): File
+    {
+        return $this->storeProofPhoto($proof, $image, 'local', 'test-bucket');
+    }
+}
+
+test('proof storage helper rejects invalid image bytes before creating files', function () {
+    $controller = new R235ProofStoreHelperProbe();
+    $proof      = new FleetOpsApiOrderProofFake();
+    $proof->setRawAttributes(['uuid' => 'proof-r235', 'public_id' => 'proof-r235'], true);
+
+    expect(fn () => $controller->storeImageForTest($proof, '%%%invalid-base64%%%'))
+        ->toThrow(InvalidArgumentException::class, 'Invalid photo image payload.');
+    expect($controller->createdFiles)->toBe([])
+        ->and($controller->storedFiles)->toBe([]);
+});
+
+test('public proof capture sets isolation on the next transaction only and rejects nesting', function () {
+    $database = new class {
+        public int $depth        = 1;
+        public array $statements = [];
+
+        public function transactionLevel(): int
+        {
+            return $this->depth;
+        }
+
+        public function statement(string $sql): bool
+        {
+            $this->statements[] = $sql;
+
+            return true;
+        }
+    };
+
+    Illuminate\Support\Facades\DB::swap($database);
+    $method = new ReflectionMethod(OrderController::class, 'requireFreshProofAuthorizationSnapshot');
+    $method->setAccessible(true);
+    $controller = new OrderController();
+
+    expect(fn () => $method->invoke($controller))
+        ->toThrow(RuntimeException::class, 'Proof capture requires a top-level database transaction.')
+        ->and($database->statements)->toBe([]);
+
+    $database->depth = 0;
+    $method->invoke($controller);
+    expect($database->statements)->toBe(['SET TRANSACTION ISOLATION LEVEL READ COMMITTED']);
+});
