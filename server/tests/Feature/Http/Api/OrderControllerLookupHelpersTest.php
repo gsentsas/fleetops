@@ -119,19 +119,22 @@ test('proof subject resolution covers order waypoint and entity types', function
     $connection = fleetopsApiOrderLookupBoot();
     $connection->table('waypoints')->insert(['uuid' => 'waypoint-1', 'public_id' => 'waypoint_test', 'payload_uuid' => 'payload-1', 'place_uuid' => 'place-1']);
     $connection->table('places')->insert(['uuid' => 'place-1', 'public_id' => 'place_test', 'name' => 'Depot']);
-    $connection->table('entities')->insert(['uuid' => 'entity-1', 'public_id' => 'entity_test', 'name' => 'Package']);
+    $connection->table('entities')->insert([
+        'uuid'         => 'entity-1', 'public_id' => 'entity_test', 'name' => 'Package',
+        'company_uuid' => 'company-1', 'payload_uuid' => 'payload-1',
+    ]);
 
     $order = new class extends Order {
         protected $guarded = [];
         public $exists     = true;
     };
-    $order->setRawAttributes(['uuid' => 'order-1', 'payload_uuid' => 'payload-1'], true);
+    $order->setRawAttributes(['uuid' => 'order-1', 'company_uuid' => 'company-1', 'payload_uuid' => 'payload-1'], true);
     $order->setRelation('payload', null);
 
     $probe = new FleetOpsApiOrderLookupProbe();
 
     expect($probe->callProtected('resolveSubject', $order, null, null))->toBe($order)
-        ->and($probe->callProtected('resolveSubject', $order, 'unknown-type', 'x'))->toBe($order);
+        ->and($probe->callProtected('resolveSubject', $order, 'unknown-type', 'x'))->toBeNull();
 
     $waypoint = $probe->callProtected('resolveSubject', $order, 'waypoint', 'waypoint_test');
     expect($waypoint)->toBeInstanceOf(Waypoint::class)
