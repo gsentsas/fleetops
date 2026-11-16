@@ -214,10 +214,17 @@ test('bulk assignment transaction and response helpers persist and wrap', functi
     $probe->callHelper('assignDriverToOrders', ['44444444-4444-4444-8444-444444444401'], $driver);
     expect($connection->table('orders')->value('driver_assigned_uuid'))->toBe('44444444-4444-4444-8444-444444444441');
 
-    $GLOBALS['fleetopsOrderHelperBus']->dispatched = [];
+    $GLOBALS['fleetopsOrderHelperBus']->dispatched      = [];
+    Fleetbase\TestSupport\DispatchRecorder::$dispatched = [];
     $probe->callHelper('dispatchBulkAssignedDriverNotification', ['44444444-4444-4444-8444-444444444401'], $driver);
-    expect(collect($GLOBALS['fleetopsOrderHelperBus']->dispatched)
-        ->contains(fn ($job) => $job instanceof Fleetbase\FleetOps\Jobs\NotifyBulkAssignedDriver))->toBeTrue();
+    // The pinned CI bootstrap records Dispatchable jobs directly; the full
+    // Laravel runtime queues an actual job object via the bus on destruction.
+    // In either case the exact NotifyBulkAssignedDriver job must be observed.
+    $busDispatched = collect($GLOBALS['fleetopsOrderHelperBus']->dispatched)
+        ->contains(fn ($job) => $job instanceof Fleetbase\FleetOps\Jobs\NotifyBulkAssignedDriver);
+    $bootstrapDispatched = collect(Fleetbase\TestSupport\DispatchRecorder::$dispatched)
+        ->contains(fn ($entry) => ($entry['job'] ?? null) === Fleetbase\FleetOps\Jobs\NotifyBulkAssignedDriver::class);
+    expect($busDispatched || $bootstrapDispatched)->toBeTrue();
 
     expect($probe->callHelper('runTransaction', fn () => 'inside'))->toBe('inside')
         ->and($probe->callHelper('jsonResponse', ['ok' => true])->getData(true))->toBe(['ok' => true])
