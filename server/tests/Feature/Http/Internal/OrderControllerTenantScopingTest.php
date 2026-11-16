@@ -407,5 +407,6 @@ test('proofs endpoint refuses another companys order', function () {
 
     $response = (new OrderController())->proofs(Request::create('/x', 'GET'), FLEETOPS_TENANT_VICTIM_ORDER);
 
-    expect($response->getData(true)['error'] ?? '')->toContain('Unable to retrieve proof');
+    expect($response->getStatusCode())->toBe(404)
+        ->and($response->getData(true)['error'])->toBe('Order resource not found.');
 });
