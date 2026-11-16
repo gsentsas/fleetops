@@ -214,9 +214,10 @@ test('bulk assignment transaction and response helpers persist and wrap', functi
     $probe->callHelper('assignDriverToOrders', ['44444444-4444-4444-8444-444444444401'], $driver);
     expect($connection->table('orders')->value('driver_assigned_uuid'))->toBe('44444444-4444-4444-8444-444444444441');
 
-    Fleetbase\TestSupport\DispatchRecorder::$dispatched = [];
+    $GLOBALS['fleetopsOrderHelperBus']->dispatched = [];
     $probe->callHelper('dispatchBulkAssignedDriverNotification', ['44444444-4444-4444-8444-444444444401'], $driver);
-    expect(collect(Fleetbase\TestSupport\DispatchRecorder::$dispatched)->pluck('job'))->toContain(Fleetbase\FleetOps\Jobs\NotifyBulkAssignedDriver::class);
+    expect(collect($GLOBALS['fleetopsOrderHelperBus']->dispatched)
+        ->contains(fn ($job) => $job instanceof Fleetbase\FleetOps\Jobs\NotifyBulkAssignedDriver))->toBeTrue();
 
     expect($probe->callHelper('runTransaction', fn () => 'inside'))->toBe('inside')
         ->and($probe->callHelper('jsonResponse', ['ok' => true])->getData(true))->toBe(['ok' => true])
@@ -252,7 +253,8 @@ test('proofs endpoint resolves order waypoint and entity subjects', function () 
     expect($missing->getStatusCode())->toBe(404);
 
     $nullSubject = $controller->proofs(Request::create('/x', 'GET'), 'order-unknown');
-    expect($nullSubject->getData(true)['error'] ?? '')->toContain('Unable to retrieve proof');
+    expect($nullSubject->getStatusCode())->toBe(404)
+        ->and($nullSubject->getData(true)['error'])->toBe('Order resource not found.');
 
     $orderProofs = $controller->proofs(Request::create('/x', 'GET'), '44444444-4444-4444-8444-444444444401');
     expect($orderProofs)->not->toBeNull();
@@ -288,11 +290,12 @@ test('status options resolve config activities and proofs default subjects', fun
     $implicit = $controller->statuses(Request::create('/x', 'GET', ['include_activities' => 1]));
     expect($implicit)->not->toBeNull();
 
-    // Proof resolution accepts public ids and unknown subject prefixes default to the order
+    // Proof resolution accepts public ids, but unknown subjects fail closed
     $probe = new FleetOpsInternalOrderHelperProbe();
     $connection->table('proofs')->insert(['uuid' => 'proof-str-1', 'public_id' => 'proof_strone1', 'company_uuid' => 'company-1', 'order_uuid' => '44444444-4444-4444-8444-444444444401', 'subject_uuid' => '44444444-4444-4444-8444-444444444401', 'subject_type' => 'Fleetbase\FleetOps\Models\Order']);
     expect($probe->callHelper('resolveProof', 'proof_strone1')?->uuid)->toBe('proof-str-1');
 
     $defaultSubject = $controller->proofs(Request::create('/x', 'GET'), '44444444-4444-4444-8444-444444444401', 'unknown_subjectkey');
-    expect($defaultSubject)->not->toBeNull();
+    expect($defaultSubject->getStatusCode())->toBe(400)
+        ->and($defaultSubject->getData(true)['error'])->toBe('Unable to retrieve proof of delivery for subject.');
 });
