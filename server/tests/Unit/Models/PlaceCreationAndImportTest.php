@@ -62,6 +62,21 @@ function fleetopsPlaceCreationBoot(): SQLiteConnection
     Illuminate\Support\Facades\DB::clearResolvedInstance('db');
 
     $disk = new class implements Filesystem {
+        public function path($path)
+        {
+            return '/unit-test-storage/' . ltrim((string) $path, '/');
+        }
+
+        public function putFile($path, $file = null, $options = [])
+        {
+            return $this->putFileAs($path, $file, basename((string) $path), $options);
+        }
+
+        public function putFileAs($path, $file, $name = null, $options = [])
+        {
+            return rtrim((string) $path, '/') . '/' . ltrim((string) $name, '/');
+        }
+
         public function url($path)
         {
             return 'https://cdn.example.com/' . ltrim((string) $path, '/');
