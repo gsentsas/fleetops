@@ -1637,6 +1637,17 @@ test('internal order controller proof collection resolves order waypoint and ent
     expect($orderProofs->collection)->toHaveCount(1)
         ->and($proof->queried_subject_uuid)->toBe('order-proof');
 
+    // An empty explicit stop must fail closed, while specifying the order UUID
+    // itself must resolve to the order rather than another delivery subject.
+    $emptySubject = $controller->proofs(new Request(), 'order-proof', '');
+    expect($emptySubject->getStatusCode())->toBe(400)
+        ->and($emptySubject->getData(true))->toBe([
+            'error' => 'Unable to retrieve proof of delivery for subject.',
+        ]);
+    $orderByUuid = $controller->proofs(new Request(), 'order-proof', $order->uuid);
+    expect($orderByUuid->collection)->toHaveCount(1)
+        ->and($proof->queried_subject_uuid)->toBe($order->uuid);
+
     $waypointProofs = $controller->proofs(new Request(), 'order-proof', 'waypoint_proof');
 
     expect($waypointProofs->collection)->toHaveCount(1)
