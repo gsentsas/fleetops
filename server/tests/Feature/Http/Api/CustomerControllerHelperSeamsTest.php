@@ -251,6 +251,24 @@ function fleetopsCustomerHelperBoot(): SQLiteConnection
     $contractDisk = new class implements Illuminate\Contracts\Filesystem\Filesystem {
         public array $writes = [];
 
+        public function path($path)
+        {
+            return '/unit-test-storage/' . ltrim((string) $path, '/');
+        }
+
+        public function putFile($path, $file, $options = [])
+        {
+            return $this->putFileAs($path, $file, basename((string) $path), $options);
+        }
+
+        public function putFileAs($path, $file, $name, $options = [])
+        {
+            $target         = rtrim((string) $path, '/') . '/' . ltrim((string) $name, '/');
+            $this->writes[] = $target;
+
+            return $target;
+        }
+
         public function url($path)
         {
             return 'https://cdn.test/' . ltrim((string) $path, '/');
