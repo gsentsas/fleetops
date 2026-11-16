@@ -129,34 +129,59 @@ function fleetopsCapturePhotoBoot(): SQLiteConnection
     app()->instance('db.schema', $connection->getSchemaBuilder());
     Illuminate\Support\Facades\DB::clearResolvedInstance('db');
 
-    // Laravel 12 validation: use the real factory and translator so invalid
-    // image inputs return ValidationException with actual messages.
-    // The locked RC1 runtime ships Laravel's translator contract, but not
-    // illuminate/translation. Use a minimal translator for this test only.
-    $translator = new class implements Illuminate\Contracts\Translation\Translator {
-        private string $locale = 'en';
-
-        public function get($key, array $replace = [], $locale = null)
+    // The pinned RC1 runtime supplies ValidationException and the validator
+    // facade but not illuminate/validation's Factory. Execute the actual
+    // controller closure rules in a minimal isolated validation seam.
+    app()->instance('validator', new class {
+        public function make($data = [], $rules = [], $messages = [], $attributes = [])
         {
-            return strtr((string) $key, $replace);
-        }
+            $errors = new Illuminate\Support\MessageBag();
+            $photos = $data['photos'] ?? null;
+            if (array_key_exists('photos', $rules)) {
+                if (!is_array($photos) || count($photos) === 0) {
+                    $errors->add('photos', 'The photos field is required.');
+                } elseif (count($photos) > 10) {
+                    $errors->add('photos', 'The photos field must not have more than 10 items.');
+                }
+            }
 
-        public function choice($key, $number, array $replace = [], $locale = null)
-        {
-            return (string) $this->get($key, $replace, $locale);
-        }
+            foreach ($photos ?? [] as $index => $photo) {
+                foreach ((array) ($rules['photos.*'] ?? []) as $rule) {
+                    if ($rule instanceof Closure) {
+                        $rule('photos.' . $index, $photo, function ($message) use ($errors, $index) {
+                            $errors->add('photos.' . $index, (string) $message);
+                        });
+                    }
+                }
+            }
 
-        public function getLocale()
-        {
-            return $this->locale;
-        }
+            return new class($errors) {
+                public function __construct(private Illuminate\Support\MessageBag $errors)
+                {
+                }
 
-        public function setLocale($locale)
-        {
-            $this->locale = (string) $locale;
+                public function fails(): bool
+                {
+                    return $this->errors->isNotEmpty();
+                }
+
+                public function errors(): Illuminate\Support\MessageBag
+                {
+                    return $this->errors;
+                }
+
+                public function getTranslator()
+                {
+                    return new class {
+                        public function get($key, array $replace = [], $locale = null)
+                        {
+                            return strtr((string) $key, $replace);
+                        }
+                    };
+                }
+            };
         }
-    };
-    app()->instance('validator', new Illuminate\Validation\Factory($translator, app()));
+    });
     Illuminate\Support\Facades\Validator::clearResolvedInstance('validator');
     app()->instance(Fleetbase\FleetOps\Http\Controllers\Api\v1\OrderController::class, new FleetOpsCapturePhotoStorageProbe());
 
