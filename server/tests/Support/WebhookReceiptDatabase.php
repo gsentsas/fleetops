@@ -60,6 +60,16 @@ final class WebhookReceiptDatabase
     /** Create the receipts table with the real migration. */
     public static function migrate(Connection $connection): void
     {
+        // The real migration declares MySQL's bytewise ascii_bin collation.
+        // Laravel 12 retains the collation in generated SQLite DDL, so the
+        // disposable PDO connection must register its binary equivalent.
+        // Preserve case-sensitive webhook digests/claim tokens in tests.
+        if ($connection instanceof SQLiteConnection) {
+            $connection->getPdo()->sqliteCreateCollation('ascii_bin', static function (string $a, string $b): int {
+                return strcmp($a, $b);
+            });
+        }
+
         app()->instance('db.schema', $connection->getSchemaBuilder());
         Facade::clearResolvedInstance('db.schema');
         (require __DIR__ . '/../../migrations/2026_11_08_000001_create_telematic_webhook_receipts_table.php')->up();

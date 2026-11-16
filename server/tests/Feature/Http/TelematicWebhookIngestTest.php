@@ -22,6 +22,18 @@ use Illuminate\Validation\ValidationException;
  * against an in-memory SQLite fixture with service, registry, and idempotency
  * fakes.
  */
+/**
+ * The pinned CI runtime does not install illuminate/validation's factory.
+ * The fake models an already-detected invalid provider record; Laravel's
+ * controller still catches the actual ValidationException type.
+ */
+class FleetOpsWebhookFakeValidationFailure extends ValidationException
+{
+    public function __construct()
+    {
+    }
+}
+
 class FleetOpsWebhookIngestServiceFake extends TelematicService
 {
     public array $linked          = [];
@@ -38,7 +50,7 @@ class FleetOpsWebhookIngestServiceFake extends TelematicService
     public function linkDevice(Telematic $telematic, array $deviceData): Device
     {
         if (empty($deviceData['external_id']) && empty($deviceData['imei'])) {
-            throw ValidationException::withMessages(['external_id' => ['required']]);
+            throw new FleetOpsWebhookFakeValidationFailure();
         }
 
         $this->linked[] = $deviceData;
@@ -64,7 +76,7 @@ class FleetOpsWebhookIngestServiceFake extends TelematicService
     public function storeSensor(Telematic $telematic, array $sensorData, ?Device $device = null): Sensor
     {
         if (empty($sensorData['name'])) {
-            throw ValidationException::withMessages(['name' => ['required']]);
+            throw new FleetOpsWebhookFakeValidationFailure();
         }
 
         $this->sensors[] = [$sensorData, $device?->uuid];
@@ -426,4 +438,11 @@ test('custom ingest signature is bound to the original request body', function (
     expect($response->getStatusCode())->toBe(403)
         ->and($service->events)->toBe([])
         ->and($service->linked)->toBe([]);
+});
+
+test('webhook receipt keys remain case sensitive in the SQLite test migration', function () {
+    $connection  = fleetopsWebhookIngestBoot();
+    $binaryMatch = $connection->selectOne("SELECT 'A' COLLATE ascii_bin = 'a' AS matches");
+
+    expect((int) $binaryMatch->matches)->toBe(0);
 });
