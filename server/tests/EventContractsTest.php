@@ -120,6 +120,16 @@ class FleetOpsGeofenceEventLogFake extends GeofenceEventLog
     }
 }
 
+class FleetOpsGeofenceArrivalPayloadFake extends Payload
+{
+    public function loadMissing($relations)
+    {
+        // This pure listener contract uses relations preloaded in memory;
+        // it must not query SQL when evaluating a candidate service stop.
+        return $this;
+    }
+}
+
 class FleetOpsGeofenceArrivalPlaceFake extends Place
 {
     public ?Point $testLocation = null;
@@ -854,7 +864,7 @@ test('geofence entered listener handles arrival branch outcomes', function () {
         $pickup->testLocation = $location;
         $pickup->setRawAttributes(['uuid' => 'pickup-place-uuid'], true);
 
-        $payload = new Payload();
+        $payload = new FleetOpsGeofenceArrivalPayloadFake();
         $payload->setRawAttributes(['uuid' => 'arrival-payload-uuid'], true);
         $payload->setRelation('pickup', $pickup);
         $payload->setRelation('dropoff', null);
