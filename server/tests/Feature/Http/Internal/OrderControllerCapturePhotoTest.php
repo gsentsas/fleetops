@@ -131,10 +131,31 @@ function fleetopsCapturePhotoBoot(): SQLiteConnection
 
     // Laravel 12 validation: use the real factory and translator so invalid
     // image inputs return ValidationException with actual messages.
-    $translator = new Illuminate\Translation\Translator(
-        new Illuminate\Translation\ArrayLoader(),
-        'en'
-    );
+    // The locked RC1 runtime ships Laravel's translator contract, but not
+    // illuminate/translation. Use a minimal translator for this test only.
+    $translator = new class implements Illuminate\Contracts\Translation\Translator {
+        private string $locale = 'en';
+
+        public function get($key, array $replace = [], $locale = null)
+        {
+            return strtr((string) $key, $replace);
+        }
+
+        public function choice($key, $number, array $replace = [], $locale = null)
+        {
+            return (string) $this->get($key, $replace, $locale);
+        }
+
+        public function getLocale()
+        {
+            return $this->locale;
+        }
+
+        public function setLocale($locale)
+        {
+            $this->locale = (string) $locale;
+        }
+    };
     app()->instance('validator', new Illuminate\Validation\Factory($translator, app()));
     Illuminate\Support\Facades\Validator::clearResolvedInstance('validator');
     app()->instance(Fleetbase\FleetOps\Http\Controllers\Api\v1\OrderController::class, new FleetOpsCapturePhotoStorageProbe());
