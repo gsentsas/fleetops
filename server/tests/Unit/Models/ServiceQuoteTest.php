@@ -415,11 +415,14 @@ test('service quote resolves request references from uuid and public id', functi
     expect(FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(fleetopsServiceQuoteUnitRequestWithQuote('11111111-1111-4111-8111-111111111111')))->toBeNull()
         ->and(FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(fleetopsServiceQuoteUnitRequestWithQuote('quote_HIJKLMN')))->toBeNull();
 
-    session()->forget('company');
+    session(['company' => null]);
     expect(FleetOpsServiceQuoteUnitResolvableFake::resolveFromRequest(fleetopsServiceQuoteUnitRequestWithQuote('11111111-1111-4111-8111-111111111111')))->toBeNull();
 });
 
 test('service quote rejects unresolved request values and checkout without company', function () {
+    // Set tenant explicitly: prior tests intentionally clear session company,
+    // and this case checks a malformed reference under a valid tenant.
+    session(['company' => 'company-service-quote']);
     FleetOpsServiceQuoteUnitResolvableFake::$lookups = [];
 
     $quote = new FleetOpsServiceQuoteUnitCheckoutFake();
