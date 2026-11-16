@@ -54,12 +54,49 @@ function providerDefaultProperty(string $class, string $property): mixed
     return (new ReflectionClass($class))->getDefaultProperties()[$property];
 }
 
-class FleetOpsProviderContractsAppFake
+class FleetOpsProviderContractsAppFake implements ArrayAccess
 {
+    public object $router;
     public array $registeredProviders     = [];
     public array $singletons              = [];
     public array $resolvingCallbacks      = [];
     public array $afterResolvingCallbacks = [];
+
+    public function __construct()
+    {
+        $this->router = new class {
+            public array $middlewares = [];
+
+            public function pushMiddlewareToGroup(string $group, string $middleware): void
+            {
+                $this->middlewares[$group][] = $middleware;
+            }
+        };
+    }
+
+    public function offsetExists(mixed $offset): bool
+    {
+        return $offset === 'router';
+    }
+
+    public function offsetGet(mixed $offset): mixed
+    {
+        if ($offset === 'router') {
+            return $this->router;
+        }
+
+        throw new LogicException('Unexpected provider container lookup');
+    }
+
+    public function offsetSet(mixed $offset, mixed $value): void
+    {
+        throw new LogicException('Unexpected provider container write');
+    }
+
+    public function offsetUnset(mixed $offset): void
+    {
+        throw new LogicException('Unexpected provider container removal');
+    }
 
     public function register(string $provider): void
     {
@@ -253,6 +290,11 @@ test('fleetops service provider executes package registration and boot wiring', 
             ->and(($app->singletons[FuelProviderRegistry::class])())->toBeInstanceOf(FuelProviderRegistry::class);
 
         $provider->boot();
+
+        expect($app->router->middlewares)->toBe([
+            'fleetbase.api'       => [Fleetbase\FleetOps\Http\Middleware\AuthorizeDeliveryOperations::class],
+            'fleetbase.protected' => [Fleetbase\FleetOps\Http\Middleware\AuthorizeDeliveryOperations::class],
+        ]);
 
         $orchestrationRegistry = new OrchestrationEngineRegistry();
         foreach ($app->resolvingCallbacks[OrchestrationEngineRegistry::class] as $callback) {
