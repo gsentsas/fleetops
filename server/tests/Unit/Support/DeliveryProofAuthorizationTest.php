@@ -383,13 +383,25 @@ test('persisted browser company mismatch is rejected by the fresh session identi
     $method      = new ReflectionMethod(DeliveryProofAuthorization::class, 'freshSessionIdentity');
     $method->setAccessible(true);
 
-    $before = $method->invoke(new DeliveryProofAuthorization(), $request);
-    expect($before)->toBeInstanceOf(User::class);
+    $authorization = new DeliveryProofAuthorization();
+    expect($method->invoke($authorization, $request))->toBeInstanceOf(User::class);
 
-    $request->session()->put('company', 'foreign-company-after-login');
-    $request->session()->save();
-    expect(session('company'))->toBe(PROOF_COMPANY);
+    // Another request changes the stored session without changing the active
+    // request's in-memory session or the globally selected company.
+    $browser = $request->session();
+    $other   = new Store('r235-test', $browser->getHandler(), $browser->getId());
+    $other->start();
+    $other->put('company', 'foreign-company-after-login');
+    $other->save();
 
-    $after = $method->invoke(new DeliveryProofAuthorization(), $request);
-    expect($after)->toBeNull();
+    $readback = new Store('r235-test', $browser->getHandler(), $browser->getId());
+    $readback->start();
+    $guardName = Fleetbase\Support\Auth::guard('web')->getName();
+    expect($readback->get($guardName))->toBe(PROOF_USER)
+        ->and($readback->get('password_hash_web'))->toBe('synthetic-hash')
+        ->and($readback->get('company'))->toBe('foreign-company-after-login')
+        ->and($browser->get('company'))->toBe(PROOF_COMPANY)
+        ->and(session('company'))->toBe(PROOF_COMPANY);
+
+    expect($method->invoke($authorization, $request))->toBeNull();
 });
