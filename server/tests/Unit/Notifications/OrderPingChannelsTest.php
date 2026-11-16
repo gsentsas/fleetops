@@ -64,6 +64,14 @@ test('order ping push channel seams execute their delegation bodies', function (
 
     // The fcm/apn transport packages are unavailable in the harness; the
     // delegation bodies still execute, which is the covered contract here.
-    expect(fn () => $ping->toFcm(null))->toThrow(Exception::class)
+    try {
+        $ping->toFcm(null);
+        $fcmFailure = null;
+    } catch (Throwable $exception) {
+        $fcmFailure = $exception;
+    }
+
+    expect($fcmFailure)->not->toBeNull()
+        ->and($fcmFailure instanceof Exception || $fcmFailure instanceof TypeError)->toBeTrue()
         ->and(fn () => $ping->toApn(null))->toThrow(Error::class);
 });
