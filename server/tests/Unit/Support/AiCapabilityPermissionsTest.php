@@ -89,11 +89,26 @@ test('permission checks for non admin users delegate to the gate', function () {
 
     $capability = new OperationalQueryCapability();
 
-    // Without an admin session user the check falls through to Auth::can,
-    // whose permission guard is unavailable in the harness — the delegation
-    // line still executes, which is the covered contract here.
-    expect(fn () => fleetopsAiPermissionsHelper('can')->invoke($capability, 'fleet-ops list order'))->toThrow(TypeError::class)
-        ->and(fn () => fleetopsAiPermissionsHelper('canAll')->invoke($capability, ['fleet-ops list order']))->toThrow(TypeError::class);
+    // Without an admin session user, delegate to Auth::can. This isolated
+    // fixture has no IAM tables: Core versions may fail with TypeError or
+    // SQLite's missing-table QueryException. Both must fail, never grant.
+    foreach ([
+        fn () => fleetopsAiPermissionsHelper('can')->invoke($capability, 'fleet-ops list order'),
+        fn () => fleetopsAiPermissionsHelper('canAll')->invoke($capability, ['fleet-ops list order']),
+    ] as $permissionCall) {
+        $failure = null;
+        try {
+            $permissionCall();
+        } catch (Throwable $exception) {
+            $failure = $exception;
+        }
+
+        expect($failure)->not->toBeNull()
+            ->and($failure instanceof TypeError || $failure instanceof Illuminate\Database\QueryException)->toBeTrue();
+        if ($failure instanceof Illuminate\Database\QueryException) {
+            expect($failure->getMessage())->toContain('no such table');
+        }
+    }
 });
 
 test('search terms extract identifiers and never fall back to the raw prompt', function () {
