@@ -377,3 +377,19 @@ test('fresh browser session identity refuses a persisted tenant change without c
 
     expect($method->invoke(new DeliveryProofAuthorization(), $request))->toBeNull();
 });
+
+test('persisted browser company mismatch is rejected by the fresh session identity check', function () {
+    [, $request] = proofAuthorizationRequest(true);
+    $method      = new ReflectionMethod(DeliveryProofAuthorization::class, 'freshSessionIdentity');
+    $method->setAccessible(true);
+
+    $before = $method->invoke(new DeliveryProofAuthorization(), $request);
+    expect($before)->toBeInstanceOf(User::class);
+
+    $request->session()->put('company', 'foreign-company-after-login');
+    $request->session()->save();
+    expect(session('company'))->toBe(PROOF_COMPANY);
+
+    $after = $method->invoke(new DeliveryProofAuthorization(), $request);
+    expect($after)->toBeNull();
+});
