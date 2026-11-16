@@ -177,7 +177,7 @@ class RadarAgenda
                 'key'           => $item['key'],
                 'driver'        => $item['subject'],
                 'rule'          => $item['rule'],
-                'shift'         => ($item['window'] ?? []) + ['uuid' => $item['source']['uuid'] ?? null, 'public_id' => $item['source']['public_id'] ?? null, 'minutes_left' => $end ? max(0, $now->diffInMinutes($end, false)) : null],
+                'shift'         => ($item['window'] ?? []) + ['uuid' => $item['source']['uuid'] ?? null, 'public_id' => $item['source']['public_id'] ?? null, 'minutes_left' => $end ? max(0, (int) $now->diffInMinutes($end, false)) : null],
                 'orders'        => array_map(fn ($order) => $order + ['finishes_after_shift' => self::finishesAfter($order, $end)], $driverOrders),
                 'active_orders' => (int) ($item['source']['active_orders'] ?? count($driverOrders)),
                 'suggested'     => $suggested,
