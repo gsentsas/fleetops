@@ -243,6 +243,20 @@ class FleetOpsInternalOrderLifecycleControllerProbe extends OrderController
         return $this->proofEntity;
     }
 
+    protected function resolveProofSubject(Order $order, ?string $subjectId = null): Order|Waypoint|Place|null
+    {
+        // Order-level collection contracts use the already prepared subject,
+        // not database-backed payload relations. The entity fallback below
+        // remains exercised against a real tenant-scoped SQLite row.
+        if ($subjectId === 'waypoint_proof' && $this->proofWaypoint) {
+            $this->proofWaypoint->setAttribute('proof_lookup_id', $subjectId);
+
+            return $this->proofWaypoint;
+        }
+
+        return null;
+    }
+
     protected function proofsForSubject(Order $order, Order|Waypoint|Entity|Place $subject)
     {
         $this->proofResults ??= collect();
@@ -1588,8 +1602,23 @@ test('internal order controller label renders supported subject formats', functi
 });
 
 test('internal order controller proof collection resolves order waypoint and entity subjects', function () {
+    $connection = fleetopsInternalOrderLifecycleUseStatusesDatabase();
+    $connection->getSchemaBuilder()->create('entities', function ($table) {
+        $table->increments('id');
+        foreach (['uuid', 'public_id', 'company_uuid', 'payload_uuid'] as $field) {
+            $table->string($field)->nullable();
+        }
+        $table->timestamp('deleted_at')->nullable();
+    });
+    $connection->table('entities')->insert([
+        ['uuid'            => 'entity-proof', 'public_id' => 'entity_proof',
+            'company_uuid' => 'company-proof', 'payload_uuid' => 'payload-proof'],
+        ['uuid'            => 'entity-other', 'public_id' => 'entity_other',
+            'company_uuid' => 'another-company', 'payload_uuid' => 'payload-proof'],
+    ]);
+
     $order = fleetopsInternalOrderLifecycleOrder('order-proof');
-    $order->forceFill(['payload_uuid' => 'payload-proof']);
+    $order->forceFill(['company_uuid' => 'company-proof', 'payload_uuid' => 'payload-proof']);
     $waypoint = new FleetOpsInternalOrderLifecycleWaypointFake();
     $waypoint->setRawAttributes(['uuid' => 'waypoint-proof'], true);
     $entity = new FleetOpsInternalOrderLifecycleEntityFake();
@@ -1617,7 +1646,11 @@ test('internal order controller proof collection resolves order waypoint and ent
     $entityProofs = $controller->proofs(new Request(), 'order-proof', 'entity_proof');
 
     expect($entityProofs->collection)->toHaveCount(1)
-        ->and($entity->proof_lookup_id)->toBe('entity_proof')
+        ->and($proof->queried_subject_uuid)->toBe('entity-proof');
+
+    // An entity from another company with the same payload key cannot be
+    // returned as proof subject.
+    expect($controller->proofs(new Request(), 'order-proof', 'entity_other')->getStatusCode())->toBe(400)
         ->and($proof->queried_subject_uuid)->toBe('entity-proof');
 
     $controller->proofWaypoint = null;
