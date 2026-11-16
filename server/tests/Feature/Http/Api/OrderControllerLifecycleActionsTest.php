@@ -268,6 +268,20 @@ test('set destination validates and persists the current service stop', function
     expect($controller->setDestination('order_missing', 'place-d')->getStatusCode())->toBe(404);
 
     fleetopsOrderLifecycleSeedOrder($connection);
+    expect($controller->setDestination('order_lifecycle', 'place-d')->getStatusCode())->toBe(422);
+
+    // Explicitly model a multi-stop order: destination changes are forbidden
+    // for pickup/dropoff-only orders by the new business boundary.
+    $connection->table('places')->insert([
+        'uuid' => 'place-w', 'company_uuid' => 'company-1', 'name' => 'Intermediate stop',
+    ]);
+    $connection->table('waypoints')->insert([
+        'uuid'         => 'waypoint-w',
+        'company_uuid' => 'company-1',
+        'payload_uuid' => 'payload-1',
+        'place_uuid'   => 'place-w',
+        'order'        => 1,
+    ]);
 
     // Unknown place keys are rejected
     $invalid = $controller->setDestination('order_lifecycle', 'place-unknown');
